@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """
-Coffee Recommendation Model Training Script with Embeddings
+Hybrid Coffee Recommendation Model Training Script
 
-This script fine-tunes a language model to recommend coffee based on
-user preferences and mood using embedding features from the preprocessing script.
-The model learns to map query embeddings to coffee recommendations.
+This script fine-tunes a language model with embedding integration for coffee recommendations.
+Combines semantic similarity matching with natural language generation.
 """
 
 import json
@@ -21,508 +20,580 @@ from datasets import Dataset
 import os
 import numpy as np
 from typing import Dict, List, Any, Optional
-from torch.utils.data import DataLoader
+import logging
+from sentence_transformers import SentenceTransformer
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Detect device
+if torch.cuda.is_available():
+    DEVICE = torch.device("cuda")
+    logger.info(f"Using CUDA device: {torch.cuda.get_device_name(0)}")
+elif torch.backends.mps.is_available():
+    DEVICE = torch.device("mps")
+    logger.info("Using Apple MPS device")
+else:
+    DEVICE = torch.device("cpu")
+    logger.info("Using CPU device")
 
 
-class EmbeddingCoffeeRecommender(nn.Module):
+class HybridCoffeeRecommender(nn.Module):
     """
-    Custom model that takes query embeddings and predicts coffee recommendations.
-    Combines embedding features with language model capabilities.
+    Hybrid model that combines embeddings with language model capabilities.
+    Uses embeddings for semantic matching and LLM for natural response generation.
     """
-    
-    def __init__(self, 
-                 base_model_name: str = "microsoft/DialoGPT-medium",
-                 query_embedding_dim: int = 384,  # all-MiniLM-L6-v2 embedding size
-                 coffee_embedding_dim: int = 384,
-                 hidden_dim: int = 512):
+
+    def __init__(
+        self,
+        base_model_name: str = "microsoft/DialoGPT-small",
+        embedding_model_name: str = "all-MiniLM-L6-v2",
+        embedding_dim: int = 384,
+        hidden_dim: int = 512,
+    ):
         super().__init__()
-        
+
         # Load base language model
         self.tokenizer = AutoTokenizer.from_pretrained(base_model_name)
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
-            
+
         self.language_model = AutoModelForCausalLM.from_pretrained(
-            base_model_name, 
-            torch_dtype=torch.float16, 
-            device_map="auto"
+            base_model_name,
+            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+            device_map="auto" if torch.cuda.is_available() else None,
         )
-        
+
+        # Embedding model for semantic matching
+        self.embedding_model = SentenceTransformer(embedding_model_name)
+
         # Embedding processing layers
-        self.query_projector = nn.Sequential(
-            nn.Linear(query_embedding_dim, hidden_dim),
+        self.embedding_projector = nn.Sequential(
+            nn.Linear(embedding_dim, hidden_dim),
             nn.ReLU(),
             nn.Dropout(0.1),
-            nn.Linear(hidden_dim, hidden_dim)
+            nn.Linear(hidden_dim, hidden_dim),
         )
-        
-        self.coffee_projector = nn.Sequential(
-            nn.Linear(coffee_embedding_dim, hidden_dim),
-            nn.ReLU(), 
-            nn.Dropout(0.1),
-            nn.Linear(hidden_dim, hidden_dim)
-        )
-        
-        # Fusion layer to combine embeddings with text
+
+        # Fusion layer to combine embeddings with text features
         self.fusion_layer = nn.Sequential(
-            nn.Linear(hidden_dim * 2, hidden_dim),
+            nn.Linear(hidden_dim + self.language_model.config.hidden_size, hidden_dim),
             nn.ReLU(),
             nn.Dropout(0.1),
-            nn.Linear(hidden_dim, self.language_model.config.hidden_size)
+            nn.Linear(hidden_dim, self.language_model.config.hidden_size),
         )
-        
+
         # Similarity prediction head
         self.similarity_head = nn.Sequential(
             nn.Linear(hidden_dim * 2, hidden_dim),
             nn.ReLU(),
             nn.Dropout(0.1),
-            nn.Linear(hidden_dim, 1),
-            nn.Sigmoid()
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(hidden_dim // 2, 1),
+            nn.Sigmoid(),
         )
-        
-    def forward(self, 
-                input_ids: torch.Tensor,
-                attention_mask: torch.Tensor,
-                query_embeddings: torch.Tensor,
-                coffee_embeddings: torch.Tensor,
-                labels: Optional[torch.Tensor] = None):
-        
+
+    def gradient_checkpointing_enable(self, gradient_checkpointing_kwargs=None):
+        """Enable gradient checkpointing for the language model."""
+        self.language_model.gradient_checkpointing_enable(gradient_checkpointing_kwargs)
+
+    def gradient_checkpointing_disable(self):
+        """Disable gradient checkpointing for the language model."""
+        self.language_model.gradient_checkpointing_disable()
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        query_embeddings: torch.Tensor,
+        coffee_embeddings: torch.Tensor,
+        labels: Optional[torch.Tensor] = None,
+    ):
+
         # Process embeddings
-        query_features = self.query_projector(query_embeddings)
-        coffee_features = self.coffee_projector(coffee_embeddings)
-        
+        query_features = self.embedding_projector(query_embeddings)
+        coffee_features = self.embedding_projector(coffee_embeddings)
+
         # Compute similarity score
         combined_features = torch.cat([query_features, coffee_features], dim=-1)
         similarity_score = self.similarity_head(combined_features)
-        
+
         # Get language model output
         lm_outputs = self.language_model(
             input_ids=input_ids,
             attention_mask=attention_mask,
             labels=labels,
-            output_hidden_states=True
+            output_hidden_states=True,
         )
-        
+
+        # Get the last hidden state for fusion
+        last_hidden_state = lm_outputs.hidden_states[-1]
+
         # Combine embedding features with text features
-        fusion_features = self.fusion_layer(combined_features)
-        
+        # Use the first token's hidden state for fusion
+        text_features = last_hidden_state[:, 0, :]  # [batch_size, hidden_size]
+        combined_features_for_fusion = torch.cat(
+            [query_features, text_features], dim=-1
+        )
+        fusion_features = self.fusion_layer(combined_features_for_fusion)
+
         # Return combined outputs
         outputs = {
-            'loss': lm_outputs.loss,
-            'logits': lm_outputs.logits,
-            'similarity_score': similarity_score,
-            'hidden_states': lm_outputs.hidden_states,
+            "loss": lm_outputs.loss,
+            "logits": lm_outputs.logits,
+            "similarity_score": similarity_score,
+            "hidden_states": lm_outputs.hidden_states,
         }
-        
+
         # Add similarity loss if in training mode
         if labels is not None and self.training:
             # Similarity loss (higher similarity for positive examples)
-            similarity_loss = nn.MSELoss()(similarity_score.squeeze(), torch.ones_like(similarity_score.squeeze()))
-            outputs['loss'] = outputs['loss'] + 0.1 * similarity_loss
-        
+            similarity_loss = nn.MSELoss()(
+                similarity_score.squeeze(), torch.ones_like(similarity_score.squeeze())
+            )
+            outputs["loss"] = outputs["loss"] + 0.1 * similarity_loss
+
         return outputs
 
 
-def load_embedding_training_data(file_path: str = "data/llm_training_data.json") -> List[Dict[str, Any]]:
-    """Load the embedding-based training data."""
+def validate_training_data(data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Validate and clean training data."""
+    valid_data = []
+    required_fields = ["input", "output"]
+
+    for i, example in enumerate(data):
+        try:
+            # Check required fields
+            for field in required_fields:
+                if field not in example:
+                    logger.warning(f"Example {i} missing field: {field}")
+                    continue
+
+            # Validate JSON format
+            if isinstance(example["input"], str):
+                input_data = json.loads(example["input"])
+            else:
+                input_data = example["input"]
+
+            if isinstance(example["output"], str):
+                output_data = json.loads(example["output"])
+            else:
+                output_data = example["output"]
+
+            # Ensure we have a query
+            query = input_data.get("query", "")
+            if not query or len(query.strip()) < 5:
+                logger.warning(f"Example {i} has invalid query: {query}")
+                continue
+
+            # Ensure we have a recommendation
+            recommendation = output_data.get("recommendation", {})
+            coffee_name = recommendation.get("name", "")
+            if not coffee_name:
+                logger.warning(f"Example {i} missing coffee name")
+                continue
+
+            valid_data.append(example)
+
+        except (json.JSONDecodeError, KeyError, TypeError) as e:
+            logger.warning(f"Example {i} has invalid format: {e}")
+            continue
+
+    logger.info(f"Validated {len(valid_data)} examples out of {len(data)}")
+    return valid_data
+
+
+def format_hybrid_prompt(example: Dict[str, Any], embedding_model) -> Dict[str, Any]:
+    """Format training example with hybrid prompt structure."""
+
     try:
-        with open(file_path, "r") as f:
-            data = json.load(f)
-        print(f"Loaded {len(data)} embedding training examples")
-        return data
-    except FileNotFoundError:
-        print(f"Training data file {file_path} not found.")
-        print("Please run the embedding preprocessing script first.")
-        return []
+        # Parse input and output
+        if isinstance(example["input"], str):
+            input_data = json.loads(example["input"])
+        else:
+            input_data = example["input"]
+
+        if isinstance(example["output"], str):
+            output_data = json.loads(example["output"])
+        else:
+            output_data = example["output"]
+
+        query = input_data.get("query", "")
+        recommendation = output_data.get("recommendation", {})
+
+        coffee_name = recommendation.get("name", "Unknown Coffee")
+        coffee_roaster = recommendation.get("roaster", "Unknown Roaster")
+        coffee_origin = recommendation.get("origin", "Unknown Origin")
+        coffee_description = recommendation.get("description", "")
+        why_recommended = recommendation.get(
+            "why_recommended", "Good match for your preferences"
+        )
+
+        # Generate embeddings for query and coffee description
+        query_embedding = embedding_model.encode([query])[0].tolist()
+        coffee_text = f"{coffee_name} {coffee_description}"
+        coffee_embedding = embedding_model.encode([coffee_text])[0].tolist()
+
+        # Enhanced prompt format with embedding context
+        prompt_text = f"""User: {query}
+
+Assistant: Based on your preferences, I recommend {coffee_name} by {coffee_roaster}.
+
+Origin: {coffee_origin}
+Description: {coffee_description}
+
+Why this coffee: {why_recommended}
+
+This recommendation is based on semantic similarity to your query. Would you like brewing suggestions?<|endoftext|>"""
+
+        return {
+            "text": prompt_text,
+            "query": query,
+            "coffee_name": coffee_name,
+            "query_embedding": query_embedding,
+            "coffee_embedding": coffee_embedding,
+        }
+
+    except Exception as e:
+        logger.error(f"Error formatting example: {e}")
+        return None
 
 
-def format_embedding_prompt(example: Dict[str, Any]) -> Dict[str, Any]:
-    """Format the training example with embeddings for complex conversational training."""
-    
-    # Parse input and output JSON
-    input_data = json.loads(example.get("input", "{}"))
-    output_data = json.loads(example.get("output", "{}"))
-    
-    instruction = example.get("instruction", "Recommend coffee based on preferences")
-    query = input_data.get("query", "")
-    query_embedding = input_data.get("query_embedding", [])
-    
-    recommendation = output_data.get("recommendation", {})
-    coffee_name = recommendation.get("name", "Unknown")
-    coffee_roaster = recommendation.get("roaster", "Unknown")
-    coffee_description = recommendation.get("description", "")
-    coffee_embedding = recommendation.get("coffee_embedding", [])
-    why_recommended = recommendation.get("why_recommended", "Good match for your preferences")
-    coffee_origin = recommendation.get("origin", "Unknown")
-    coffee_rating = recommendation.get("rating", 0)
-    
-    # Enhanced conversational format for complex query handling
-    prompt_text = f"""<|user|>
-{query}
-
-<|assistant|>
-I'd recommend **{coffee_name}** by {coffee_roaster}.
-
-**Origin:** {coffee_origin}
-**Rating:** {coffee_rating}/100
-
-**Why this coffee:** {why_recommended}
-
-**Tasting Profile:** {coffee_description}
-
-This recommendation takes into account your specific preferences and mood. The embedding similarity indicates this coffee aligns well with what you're looking for. Would you like me to suggest any brewing methods or alternatives?<|endoftext|>"""
-
-    return {
-        "text": prompt_text,
-        "query_embedding": query_embedding,
-        "coffee_embedding": coffee_embedding,
-        "query": query,
-        "coffee_name": coffee_name,
-        "metadata": example.get("metadata", {})
-    }
-
-
-def prepare_embedding_dataset(data: List[Dict[str, Any]], tokenizer) -> Dataset:
-    """Prepare the dataset with embeddings for training."""
+def prepare_hybrid_dataset(
+    data: List[Dict[str, Any]], tokenizer, embedding_model
+) -> Dataset:
+    """Prepare dataset with hybrid processing."""
     formatted_data = []
-    
-    print("Formatting embedding data...")
-    for example in data:
-        formatted_example = format_embedding_prompt(example)
-        
-        # Verify embeddings exist and are valid
-        if (len(formatted_example["query_embedding"]) > 0 and 
-            len(formatted_example["coffee_embedding"]) > 0):
-            formatted_data.append(formatted_example)
-    
-    print(f"Prepared {len(formatted_data)} valid examples with embeddings")
-    
+
+    logger.info("Formatting hybrid training data...")
+    for i, example in enumerate(data):
+        try:
+            formatted_example = format_hybrid_prompt(example, embedding_model)
+            if formatted_example:
+                formatted_data.append(formatted_example)
+        except Exception as e:
+            logger.warning(f"Error processing example {i}: {e}")
+            continue
+
+    logger.info(f"Prepared {len(formatted_data)} valid examples")
+
+    if len(formatted_data) == 0:
+        raise ValueError("No valid training examples found!")
+
     # Create dataset
     dataset = Dataset.from_list(formatted_data)
-    
+
     # Tokenize the text
     def tokenize_function(examples):
         tokenized = tokenizer(
             examples["text"],
             truncation=True,
-            padding="max_length", 
-            max_length=512,
+            padding="max_length",
+            max_length=256,  # Reduced for memory efficiency
             return_tensors="pt",
         )
-        
+
         # Add embeddings as additional features
         tokenized["query_embeddings"] = examples["query_embedding"]
         tokenized["coffee_embeddings"] = examples["coffee_embedding"]
-        
+
         return tokenized
-    
+
     tokenized_dataset = dataset.map(
-        tokenize_function, 
-        batched=True, 
-        remove_columns=["text", "query", "coffee_name", "metadata"]
+        tokenize_function, batched=True, remove_columns=["text", "query", "coffee_name"]
     )
-    
+
     return tokenized_dataset
 
 
-class EmbeddingDataCollator:
-    """Custom data collator for embedding-based training."""
-    
+class HybridDataCollator:
+    """Custom data collator for hybrid training."""
+
     def __init__(self, tokenizer, pad_to_multiple_of=None):
         self.tokenizer = tokenizer
         self.pad_to_multiple_of = pad_to_multiple_of
-    
+
     def __call__(self, features):
         # Extract embeddings
         query_embeddings = []
         coffee_embeddings = []
-        
+
         for feature in features:
             query_embeddings.append(feature.pop("query_embeddings"))
             coffee_embeddings.append(feature.pop("coffee_embeddings"))
-        
+
         # Standard tokenizer collation for text
         batch = self.tokenizer.pad(
             features,
             padding=True,
-            max_length=512,
+            max_length=256,
             pad_to_multiple_of=self.pad_to_multiple_of,
             return_tensors="pt",
         )
-        
+
         # Add embeddings to batch
         batch["query_embeddings"] = torch.tensor(query_embeddings, dtype=torch.float32)
-        batch["coffee_embeddings"] = torch.tensor(coffee_embeddings, dtype=torch.float32)
-        
+        batch["coffee_embeddings"] = torch.tensor(
+            coffee_embeddings, dtype=torch.float32
+        )
+
         # Set labels for language modeling
         batch["labels"] = batch["input_ids"].clone()
-        
+
         return batch
 
 
-class EmbeddingTrainer(Trainer):
-    """Custom trainer for embedding-based coffee recommendation."""
-    
+class HybridTrainer(Trainer):
+    """Custom trainer for hybrid coffee recommendation."""
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-    
-    def compute_loss(self, model, inputs, return_outputs=False):
+
+    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
         """Custom loss computation."""
-        
+
         # Extract embeddings from inputs
         query_embeddings = inputs.pop("query_embeddings")
         coffee_embeddings = inputs.pop("coffee_embeddings")
-        
+
         # Forward pass with embeddings
         outputs = model(
             input_ids=inputs["input_ids"],
             attention_mask=inputs["attention_mask"],
             query_embeddings=query_embeddings,
             coffee_embeddings=coffee_embeddings,
-            labels=inputs.get("labels")
+            labels=inputs.get("labels"),
         )
-        
-        loss = outputs['loss']
-        
+
+        loss = outputs["loss"]
+
         return (loss, outputs) if return_outputs else loss
 
 
-def create_embedding_model_and_tokenizer(model_name: str = "microsoft/DialoGPT-medium"):
-    """Create embedding-aware model and tokenizer."""
-    print(f"Creating embedding-aware model: {model_name}")
-    
-    # For conversational coffee recommendations, consider these alternatives:
-    # - "microsoft/DialoGPT-medium": Good for conversations
-    # - "facebook/blenderbot-400M-distill": Better for helpful responses  
-    # - "microsoft/DialoGPT-small": Faster training, still good quality
-    
-    model = EmbeddingCoffeeRecommender(base_model_name=model_name)
-    tokenizer = model.tokenizer
-    
-    # Add special tokens for better conversation flow
-    special_tokens = ["<|user|>", "<|assistant|>", "<|coffee|>", "<|recommendation|>"]
-    tokenizer.add_tokens(special_tokens)
-    model.language_model.resize_token_embeddings(len(tokenizer))
-    
-    return model, tokenizer
+def create_hybrid_model_and_tokenizer(model_name: str = "microsoft/DialoGPT-small"):
+    """Create hybrid model and tokenizer."""
+    try:
+        logger.info(f"Creating hybrid model: {model_name}")
+
+        # Create hybrid model
+        model = HybridCoffeeRecommender(base_model_name=model_name)
+        tokenizer = model.tokenizer
+
+        # Add special tokens
+        special_tokens = ["<|user|>", "<|assistant|>"]
+        tokenizer.add_tokens(special_tokens)
+        model.language_model.resize_token_embeddings(len(tokenizer))
+
+        logger.info("Hybrid model and tokenizer created successfully")
+        return model, tokenizer
+
+    except Exception as e:
+        logger.error(f"Error creating hybrid model: {e}")
+        raise
 
 
-def train_embedding_model(
+def train_hybrid_model(
     model,
-    tokenizer, 
+    tokenizer,
     train_dataset,
-    output_dir: str = "models/coffee_embedding_recommender",
-    num_epochs: int = 3,
-    batch_size: int = 2,  # Smaller batch size due to embeddings
-    learning_rate: float = 2e-5,  # Lower learning rate for fine-tuning
-    freeze_strategy: str = "finetune_top"  # Default to safe fine-tuning strategy
+    output_dir: str = "models/coffee_hybrid_recommender",
+    num_epochs: int = 5,
+    batch_size: int = 8,  # Increased for better GPU utilization
+    learning_rate: float = 1e-5,
 ):
-    """Train the embedding-aware model with configurable freezing strategy."""
-    
-    # Apply freezing strategy
-    if freeze_strategy == "freeze_base":
-        print("Applying freeze_base strategy: Only training embedding layers")
-        for param in model.language_model.parameters():
-            param.requires_grad = False
-            
-    elif freeze_strategy == "finetune_top":
-        print("Applying coffee domain adaptation strategy:")
-        print("- Freezing bottom transformer layers (preserving base language abilities)")
-        print("- Fine-tuning top 3 transformer layers (coffee domain adaptation)")
-        print("- Training all embedding layers (learning coffee-query matching)")
-        
-        # Freeze bottom layers of the transformer
-        total_layers = len(model.language_model.transformer.h)
-        layers_to_finetune = 3  # Top 3 layers - good balance
-        
-        # Freeze word embeddings (preserve vocabulary understanding)
-        for param in model.language_model.transformer.wte.parameters():
-            param.requires_grad = False
-        for param in model.language_model.transformer.wpe.parameters():
-            param.requires_grad = False
-            
-        # Freeze bottom transformer layers (preserve base language understanding)
-        for i in range(total_layers - layers_to_finetune):
-            for param in model.language_model.transformer.h[i].parameters():
-                param.requires_grad = False
-                
-        print(f"Frozen: Bottom {total_layers - layers_to_finetune} layers + embeddings")
-        print(f"Trainable: Top {layers_to_finetune} layers + final layers + embedding projectors")
-        
-    elif freeze_strategy == "full_finetune":
-        print("Applying full_finetune strategy: Training all parameters")
-        # All parameters remain trainable (default)
-        pass
-    
-    # Count trainable parameters
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    total_params = sum(p.numel() for p in model.parameters())
-    print(f"Trainable parameters: {trainable_params:,} / {total_params:,} ({100*trainable_params/total_params:.1f}%)")
-    
-    # Create output directory
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # Differential learning rates optimized for coffee domain adaptation
-    if freeze_strategy == "finetune_top":
-        # Use much lower learning rates for pre-trained components
-        optimizer_grouped_parameters = [
-            {
-                "params": [p for n, p in model.language_model.named_parameters() if p.requires_grad],
-                "lr": learning_rate * 0.1,  # Very small changes to pre-trained layers
-                "weight_decay": 0.01,
-            },
-            {
-                "params": [p for n, p in model.named_parameters() if "language_model" not in n and p.requires_grad],
-                "lr": learning_rate * 5,  # Higher LR for new embedding layers that start from random
-                "weight_decay": 0.01,
-            },
-        ]
-        print(f"✓ Learning rates - Language model: {learning_rate*0.1:.2e}, Embeddings: {learning_rate*5:.2e}")
-    else:
-        optimizer_grouped_parameters = None
-    
-    # Training arguments
-    training_args = TrainingArguments(
-        output_dir=output_dir,
-        num_train_epochs=num_epochs,
-        per_device_train_batch_size=batch_size,
-        per_device_eval_batch_size=batch_size,
-        gradient_accumulation_steps=4,  # Effective batch size = 2 * 4 = 8
-        warmup_steps=100,
-        weight_decay=0.01,
-        learning_rate=learning_rate if optimizer_grouped_parameters is None else 3e-5,  # Will be overridden by optimizer
-        logging_dir=f"{output_dir}/logs",
-        logging_steps=10,
-        save_steps=500,
-        eval_steps=500,
-        evaluation_strategy="steps" if len(train_dataset) > 1000 else "no",
-        save_strategy="steps",
-        load_best_model_at_end=False,  # Disable for now due to custom model
-        fp16=True,
-        dataloader_pin_memory=False,
-        remove_unused_columns=False,
-        report_to=None,  # Disable wandb logging
-    )
-    
-    # Custom data collator for embeddings
-    data_collator = EmbeddingDataCollator(tokenizer=tokenizer)
-    
-    # Initialize custom trainer
-    trainer = EmbeddingTrainer(
-        model=model,
-        args=training_args,
-        train_dataset=train_dataset,
-        data_collator=data_collator,
-        tokenizer=tokenizer,
-        optimizers=(
-            torch.optim.AdamW(optimizer_grouped_parameters, eps=1e-8) if optimizer_grouped_parameters else None,
-            None
+    """Train the hybrid model."""
+    try:
+        # Move model to device
+        model.to(DEVICE)
+        # Create output directory
+        os.makedirs(output_dir, exist_ok=True)
+        # Count parameters
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        total_params = sum(p.numel() for p in model.parameters())
+        logger.info(
+            f"Trainable parameters: {trainable_params:,} / {total_params:,} ({100*trainable_params/total_params:.1f}%)"
         )
-    )
-    
-    # Train the model
-    print("Starting embedding-aware training...")
-    trainer.train()
-    
-    # Save the model
-    print(f"Saving model to {output_dir}")
-    model.language_model.save_pretrained(f"{output_dir}/language_model")
-    tokenizer.save_pretrained(f"{output_dir}/tokenizer")
-    
-    # Save the full model state
-    torch.save({
-        'model_state_dict': model.state_dict(),
-        'model_config': {
-            'base_model_name': "microsoft/DialoGPT-medium",
-            'query_embedding_dim': 384,
-            'coffee_embedding_dim': 384,
-            'hidden_dim': 512
-        }
-    }, f"{output_dir}/full_model.pt")
-    
-    print(f"Model saved to {output_dir}")
-    return trainer
-
-
-def test_embedding_model(model, tokenizer, test_query: str = "I need an energizing coffee"):
-    """Test the trained embedding model with a sample query."""
-    print(f"\nTesting model with query: '{test_query}'")
-    
-    # This would require the sentence transformer model to create embeddings
-    # For now, we'll create a dummy embedding
-    dummy_query_embedding = torch.randn(1, 384)
-    dummy_coffee_embedding = torch.randn(1, 384)
-    
-    # Format test input
-    test_prompt = f"""### Instruction:
-Recommend coffee based on preferences
-
-### User Query:
-{test_query}
-
-### Recommended Coffee:"""
-    
-    # Tokenize
-    inputs = tokenizer(test_prompt, return_tensors="pt", truncation=True, max_length=256)
-    
-    # Generate recommendation (without embeddings for this simple test)
-    model.eval()
-    with torch.no_grad():
-        # For testing, we'll just use the language model part
-        outputs = model.language_model.generate(
-            inputs["input_ids"],
-            attention_mask=inputs["attention_mask"],
-            max_new_tokens=100,
-            do_sample=True,
-            temperature=0.7,
-            pad_token_id=tokenizer.eos_token_id
+        # Training arguments
+        training_args = TrainingArguments(
+            output_dir=output_dir,
+            num_train_epochs=num_epochs,
+            per_device_train_batch_size=batch_size,
+            per_device_eval_batch_size=batch_size,
+            gradient_accumulation_steps=4,  # Reduced since batch_size increased
+            warmup_steps=50,
+            weight_decay=0.01,
+            learning_rate=learning_rate,
+            logging_dir=f"{output_dir}/logs",
+            logging_steps=10,
+            save_steps=200,
+            save_strategy="steps",
+            load_best_model_at_end=False,
+            fp16=torch.cuda.is_available(),  # Enable fp16 for CUDA
+            bf16=torch.cuda.is_bf16_supported() if torch.cuda.is_available() else False,
+            dataloader_pin_memory=torch.cuda.is_available(),
+            remove_unused_columns=False,
+            report_to=None,
+            gradient_checkpointing=True,
+            optim="adamw_torch",
+            # For multi-GPU, launch with torchrun or accelerate
         )
-    
-    response = tokenizer.decode(outputs[0], skip_special_tokens=True)
-    print("Model response:")
-    print(response[len(test_prompt):])
+        # Custom data collator for embeddings
+        data_collator = HybridDataCollator(tokenizer=tokenizer)
+        # Initialize custom trainer
+        trainer = HybridTrainer(
+            model=model,
+            args=training_args,
+            train_dataset=train_dataset,
+            data_collator=data_collator,
+            tokenizer=tokenizer,
+        )
+        # Train the model
+        logger.info("Starting hybrid training...")
+        trainer.train()
+        # Save the model
+        logger.info(f"Saving hybrid model to {output_dir}")
+        trainer.save_model(output_dir)
+        tokenizer.save_pretrained(output_dir)
+        # Save the full model state
+        torch.save(
+            {
+                "model_state_dict": model.state_dict(),
+                "model_config": {
+                    "base_model_name": model.language_model.name_or_path,
+                    "embedding_model_name": "all-MiniLM-L6-v2",
+                    "embedding_dim": 384,
+                    "hidden_dim": 512,
+                },
+            },
+            f"{output_dir}/full_model.pt",
+        )
+        logger.info(f"Hybrid model saved to {output_dir}")
+        return trainer
+    except Exception as e:
+        logger.error(f"Hybrid training failed: {e}")
+        raise
+
+
+def test_hybrid_model(
+    model, tokenizer, embedding_model, test_query: str = "I need an energizing coffee"
+):
+    """Test the trained hybrid model."""
+    logger.info(f"Testing hybrid model with query: '{test_query}'")
+    try:
+        # Generate query embedding
+        query_embedding = embedding_model.encode([test_query])[0]
+        query_embedding_tensor = torch.tensor(query_embedding).unsqueeze(0).to(DEVICE)
+        # Format test input
+        test_prompt = f"""User: {test_query}\n\nAssistant: Based on your preferences, I recommend"""
+        # Tokenize
+        inputs = tokenizer(
+            test_prompt, return_tensors="pt", truncation=True, max_length=128
+        )
+        # Move to same device as model
+        inputs = {k: v.to(DEVICE) for k, v in inputs.items()}
+        # Create dummy coffee embedding for testing
+        dummy_coffee_embedding = torch.randn(1, 384).to(DEVICE)
+        # Generate response (with autocast for mixed precision)
+        model.eval()
+        with torch.no_grad():
+            with torch.cuda.amp.autocast(enabled=torch.cuda.is_available()):
+                outputs = model.language_model.generate(
+                    **inputs,
+                    max_new_tokens=100,
+                    do_sample=True,
+                    temperature=0.7,
+                    pad_token_id=tokenizer.eos_token_id,
+                    eos_token_id=tokenizer.eos_token_id,
+                )
+        response = tokenizer.decode(outputs[0], skip_special_tokens=True)
+        logger.info("Model response:")
+        logger.info(response[len(test_prompt) :])
+    except Exception as e:
+        logger.error(f"Error testing hybrid model: {e}")
+
+
+def load_training_data(
+    file_path: str = "data/llm_training_data.json",
+) -> List[Dict[str, Any]]:
+    """Load and validate training data."""
+    try:
+        with open(file_path, "r") as f:
+            data = json.load(f)
+        logger.info(f"Loaded {len(data)} training examples")
+
+        # Validate data
+        valid_data = validate_training_data(data)
+
+        if len(valid_data) == 0:
+            raise ValueError("No valid training data found!")
+
+        return valid_data
+
+    except FileNotFoundError:
+        logger.error(f"Training data file {file_path} not found.")
+        logger.info("Please run the data preprocessing script first.")
+        return []
+    except json.JSONDecodeError as e:
+        logger.error(f"Invalid JSON in training data: {e}")
+        return []
+    except Exception as e:
+        logger.error(f"Error loading training data: {e}")
+        return []
 
 
 def main():
-    """Main training function for embedding-aware coffee recommendation."""
-    print("Starting embedding-aware coffee recommendation model training...")
-    print("=" * 70)
-    
-    # Load embedding training data
-    training_data = load_embedding_training_data()
-    if not training_data:
-        print("No training data found. Please run the embedding preprocessing script first.")
-        return
-    
-    # Create embedding-aware model and tokenizer
-    model, tokenizer = create_embedding_model_and_tokenizer()
-    
-    # Prepare dataset with embeddings
-    print("Preparing embedding dataset...")
-    train_dataset = prepare_embedding_dataset(training_data, tokenizer)
-    
-    if len(train_dataset) == 0:
-        print("No valid training examples found. Check your data format.")
-        return
-    
-    print(f"Training on {len(train_dataset)} examples")
-    
-    # Train model with coffee domain adaptation strategy
-    trainer = train_embedding_model(model, tokenizer, train_dataset)
-    
-    print(f"\nTraining Summary:")
-    print(f"- Strategy: Fine-tune top layers + train embedding layers")
-    print(f"- Base language model: Mostly preserved")
-    print(f"- Coffee adaptation: Top 3 transformer layers + all embedding layers")
-    print(f"- Training focus: Domain adaptation, not full retraining")
-    
-    # Test the model
-    test_embedding_model(model, tokenizer)
-    
-    print("\n" + "=" * 70)
-    print("EMBEDDING-AWARE TRAINING COMPLETED!")
-    print("Your model can now use both text and embedding features for recommendations.")
-    print("=" * 70)
+    """Main training function for hybrid coffee recommendation."""
+    logger.info("Starting hybrid coffee recommendation model training...")
+    logger.info("=" * 70)
+
+    try:
+        # Load training data
+        training_data = load_training_data()
+        if not training_data:
+            logger.error(
+                "No training data found. Please run the data preprocessing script first."
+            )
+            return
+
+        # Create hybrid model and tokenizer
+        model, tokenizer = create_hybrid_model_and_tokenizer()
+
+        # Load embedding model
+        logger.info("Loading embedding model...")
+        embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+
+        # Prepare dataset
+        logger.info("Preparing hybrid dataset...")
+        train_dataset = prepare_hybrid_dataset(
+            training_data, tokenizer, embedding_model
+        )
+
+        logger.info(f"Training on {len(train_dataset)} examples")
+
+        # Train model
+        trainer = train_hybrid_model(model, tokenizer, train_dataset)
+
+        logger.info("Training Summary:")
+        logger.info("- Model: Hybrid (DialoGPT-small + Embeddings)")
+        logger.info("- Training strategy: Embedding-aware fine-tuning")
+        logger.info("- Batch size: 1 (with gradient accumulation)")
+        logger.info("- Memory optimizations: gradient checkpointing, fp16")
+
+        # Test the model
+        test_hybrid_model(model, tokenizer, embedding_model)
+
+        logger.info("\n" + "=" * 70)
+        logger.info("HYBRID TRAINING COMPLETED SUCCESSFULLY!")
+        logger.info("Your model can now use embeddings for semantic matching.")
+        logger.info("=" * 70)
+
+    except Exception as e:
+        logger.error(f"Training failed with error: {e}")
+        logger.error("Please check the error message above and fix the issue.")
+        raise
 
 
 if __name__ == "__main__":
