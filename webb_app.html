@@ -1,0 +1,705 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>London Coffee Shop Finder</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #4a5568 0%, #2d3748 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            font-weight: 700;
+        }
+
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+
+        .search-section {
+            padding: 30px;
+            background: white;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        .search-container {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .search-input {
+            flex: 1;
+            min-width: 250px;
+            padding: 15px 20px;
+            border: 2px solid #e2e8f0;
+            border-radius: 12px;
+            font-size: 16px;
+            transition: all 0.3s ease;
+            background: #f8fafc;
+        }
+
+        .search-input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+            background: white;
+        }
+
+        .search-btn {
+            padding: 15px 30px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s ease, box-shadow 0.3s ease;
+        }
+
+        .search-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+        }
+
+        .clear-btn {
+            padding: 15px 25px;
+            background: #e2e8f0;
+            color: #4a5568;
+            border: none;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .clear-btn:hover {
+            background: #cbd5e0;
+            transform: translateY(-1px);
+        }
+
+        .content {
+            display: flex;
+            min-height: 600px;
+        }
+
+        .sidebar {
+            width: 400px;
+            background: #f8fafc;
+            border-right: 1px solid #e2e8f0;
+            overflow-y: auto;
+            max-height: 600px;
+        }
+
+        .coffee-shop {
+            padding: 20px;
+            border-bottom: 1px solid #e2e8f0;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            position: relative;
+        }
+
+        .coffee-shop:hover {
+            background: #edf2f7;
+            transform: translateX(5px);
+        }
+
+        .coffee-shop.selected {
+            background: linear-gradient(135deg, #667eea20 0%, #764ba220 100%);
+            border-left: 4px solid #667eea;
+        }
+
+        .shop-name {
+            font-size: 1.2em;
+            font-weight: 700;
+            color: #2d3748;
+            margin-bottom: 8px;
+        }
+
+        .shop-address {
+            color: #718096;
+            font-size: 0.9em;
+            margin-bottom: 12px;
+        }
+
+        .coffee-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+
+        .coffee-tag {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 0.8em;
+            font-weight: 500;
+        }
+
+        .coffee-tag.highlight {
+            background: linear-gradient(135deg, #f56565 0%, #e53e3e 100%);
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+
+        .map-container {
+            flex: 1;
+            position: relative;
+            background: #e2e8f0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #map {
+            width: 100%;
+            height: 100%;
+            min-height: 600px;
+            background: #e2e8f0;
+        }
+
+        .map-placeholder {
+            text-align: center;
+            color: #718096;
+            padding: 40px;
+        }
+
+        .map-placeholder h3 {
+            font-size: 1.5em;
+            margin-bottom: 15px;
+            color: #4a5568;
+        }
+
+        .results-count {
+            text-align: center;
+            padding: 15px;
+            background: #edf2f7;
+            font-weight: 600;
+            color: #4a5568;
+        }
+
+        .no-results {
+            text-align: center;
+            padding: 40px;
+            color: #718096;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #667eea;
+            font-weight: 600;
+        }
+
+        @media (max-width: 768px) {
+            .content {
+                flex-direction: column;
+            }
+            
+            .sidebar {
+                width: 100%;
+                max-height: 400px;
+            }
+            
+            .search-container {
+                flex-direction: column;
+            }
+            
+            .search-input {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>☕ London Coffee Shop Finder</h1>
+            <p>Discover amazing coffee shops across London by searching for your favorite coffee type</p>
+        </div>
+
+        <div class="search-section">
+            <div class="search-container">
+                <input 
+                    type="text" 
+                    id="coffeeSearch" 
+                    class="search-input" 
+                    placeholder="Search for coffee type (e.g., cappuccino, flat white, espresso...)"
+                    autocomplete="off"
+                >
+                <button class="search-btn" onclick="searchCoffee()">Search Coffee Shops</button>
+                <button class="clear-btn" onclick="clearSearch()">Clear</button>
+                <button class="clear-btn" onclick="switchMapStyle()" id="mapStyleBtn">Switch Map Style</button>
+            </div>
+        </div>
+
+        <div class="content">
+            <div class="sidebar">
+                <div class="results-count" id="resultsCount">Enter a coffee type to find shops</div>
+                <div id="shopsList"></div>
+            </div>
+            <div class="map-container">
+                <div id="map"></div>
+                <div class="map-placeholder" id="mapPlaceholder">
+                    <h3>🗺️ Interactive Map</h3>
+                    <p>Search for a coffee type to see shop locations on the map</p>
+                    <p style="margin-top: 15px; font-size: 0.9em;">The map will show markers for all coffee shops that serve your searched coffee type</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/fuse.js/6.6.2/fuse.min.js"></script>
+    <!-- Leaflet CSS and JS for free maps -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+    <script>
+        // Load coffee shops data from JSON file
+        let coffeeShops = [];
+        
+        // Function to load and transform coffee shops data
+        async function loadCoffeeShopsData() {
+            try {
+                const response = await fetch('coffee_shops_data.json');
+                const data = await response.json();
+                
+                // Transform the data to match the expected format
+                coffeeShops = data.coffeeShops.map(shop => ({
+                    name: shop.name,
+                    address: shop.address,
+                    lat: shop.lat,
+                    lng: shop.lng,
+                    coffees: shop.coffees.map(coffee => coffee.name)
+                }));
+                
+                console.log(`Loaded ${coffeeShops.length} coffee shops with ${coffeeShops.reduce((total, shop) => total + shop.coffees.length, 0)} total coffees`);
+                
+                // Reinitialize Fuse.js with the new data
+                fuse = new Fuse(coffeeShops, {
+                    keys: ['coffees'],
+                    threshold: 0.3,
+                    includeScore: true
+                });
+                
+            } catch (error) {
+                console.error('Error loading coffee shops data:', error);
+                // Fallback to empty array if loading fails
+                coffeeShops = [];
+            }
+        }
+
+        let currentMapStyle = 0;
+        const mapStyles = [
+            {
+                name: "Clean Streets",
+                url: "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
+                attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors © <a href="https://carto.com/attributions">CARTO</a>'
+            },
+            {
+                name: "Standard OSM",
+                url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+                attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            },
+            {
+                name: "Dark Mode",
+                url: "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+                attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors © <a href="https://carto.com/attributions">CARTO</a>'
+            },
+            {
+                name: "Satellite-ish",
+                url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+                attribution: 'Tiles © Esri'
+            }
+        ];
+
+        function switchMapStyle() {
+            if (!map) return;
+            
+            currentMapStyle = (currentMapStyle + 1) % mapStyles.length;
+            const style = mapStyles[currentMapStyle];
+            
+            // Remove existing tile layers
+            map.eachLayer(function(layer) {
+                if (layer instanceof L.TileLayer) {
+                    map.removeLayer(layer);
+                }
+            });
+            
+            // Add new tile layer
+            L.tileLayer(style.url, {
+                attribution: style.attribution,
+                maxZoom: 19,
+                subdomains: 'abcd'
+            }).addTo(map);
+            
+            // Update button text
+            const nextStyle = mapStyles[(currentMapStyle + 1) % mapStyles.length];
+            document.getElementById('mapStyleBtn').textContent = `Switch to ${nextStyle.name}`;
+            
+            console.log(`Switched to: ${style.name}`);
+        }
+
+        // Initialize Fuse.js for fuzzy search
+        let fuse = new Fuse([], {
+            keys: ['coffees'],
+            threshold: 0.3,
+            includeScore: true
+        });
+
+        // Initialize Leaflet Map (Free Alternative)
+        function initMap() {
+            // Create map centered on London
+            map = L.map('map').setView([51.5074, -0.1278], 12);
+            
+            // Try multiple tile servers for better reliability
+            let tileLayer;
+            
+            // Primary: CartoDB Positron (clean, reliable)
+            tileLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+                attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors © <a href="https://carto.com/attributions">CARTO</a>',
+                maxZoom: 19,
+                subdomains: 'abcd'
+            });
+            
+            // Add error handling for tiles
+            tileLayer.on('tileerror', function(error) {
+                console.log('Tile loading error, trying backup...');
+                // Fallback to OpenStreetMap if CartoDB fails
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+                    maxZoom: 19,
+                    subdomains: 'abc'
+                }).addTo(map);
+            });
+            
+            tileLayer.addTo(map);
+            
+            // Add loading indicator
+            map.on('loading', function() {
+                console.log('Map is loading...');
+            });
+            
+            map.on('load', function() {
+                console.log('Map loaded successfully!');
+                document.getElementById('mapPlaceholder').style.display = 'none';
+            });
+            
+            // Hide placeholder when map loads
+            setTimeout(() => {
+                document.getElementById('mapPlaceholder').style.display = 'none';
+            }, 2000);
+        }
+
+        function searchCoffee() {
+            const searchTerm = document.getElementById('coffeeSearch').value.trim().toLowerCase();
+            
+            if (!searchTerm) {
+                clearSearch();
+                return;
+            }
+
+            // Clear existing markers
+            clearMarkers();
+
+            // Find matching shops
+            const results = fuse.search(searchTerm);
+            currentResults = results.map(result => result.item);
+
+            // Display results
+            displayResults(currentResults, searchTerm);
+
+            // Add markers to map
+            addMarkersToMap(currentResults, searchTerm);
+
+            // Update results count
+            updateResultsCount(currentResults.length, searchTerm);
+        }
+
+        function displayResults(shops, searchTerm) {
+            const shopsList = document.getElementById('shopsList');
+            
+            if (shops.length === 0) {
+                shopsList.innerHTML = `
+                    <div class="no-results">
+                        <h3>No coffee shops found</h3>
+                        <p>Try searching for: espresso, cappuccino, flat white, americano, cold brew, pour over, or single origin</p>
+                    </div>
+                `;
+                return;
+            }
+
+            shopsList.innerHTML = shops.map((shop, index) => `
+                <div class="coffee-shop" onclick="selectShop(${index})" id="shop-${index}">
+                    <div class="shop-name">${shop.name}</div>
+                    <div class="shop-address">${shop.address}</div>
+                    <div class="coffee-list">
+                        ${shop.coffees.map(coffee => 
+                            `<span class="coffee-tag ${coffee.toLowerCase().includes(searchTerm) ? 'highlight' : ''}">${coffee}</span>`
+                        ).join('')}
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function addMarkersToMap(shops, searchTerm) {
+            if (!map) {
+                // Fallback: show text-based locations
+                showFallbackMarkers(shops, searchTerm);
+                return;
+            }
+
+            // Clear existing markers
+            if (window.mapMarkers) {
+                window.mapMarkers.forEach(marker => map.removeLayer(marker));
+            }
+            window.mapMarkers = [];
+
+            const group = new L.featureGroup();
+
+            shops.forEach((shop, index) => {
+                // Create custom coffee icon
+                const coffeeIcon = L.divIcon({
+                    html: `
+                        <div style="
+                            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                            width: 30px;
+                            height: 30px;
+                            border-radius: 50%;
+                            display: flex;
+                            align-items: center;
+                            justify-content: center;
+                            color: white;
+                            font-size: 16px;
+                            font-weight: bold;
+                            border: 3px solid white;
+                            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+                        ">☕</div>
+                    `,
+                    className: 'custom-div-icon',
+                    iconSize: [30, 30],
+                    iconAnchor: [15, 15]
+                });
+
+                const marker = L.marker([shop.lat, shop.lng], { icon: coffeeIcon })
+                    .addTo(map);
+
+                // Create popup content
+                const popupContent = `
+                    <div style="padding: 10px; max-width: 250px;">
+                        <h3 style="margin: 0 0 8px 0; color: #2d3748; font-size: 16px;">${shop.name}</h3>
+                        <p style="margin: 0 0 12px 0; color: #718096; font-size: 14px;">${shop.address}</p>
+                        <div style="display: flex; flex-wrap: wrap; gap: 4px;">
+                            ${shop.coffees.map(coffee => 
+                                `<span style="background: ${coffee.toLowerCase().includes(searchTerm) ? '#f56565' : '#667eea'}; color: white; padding: 2px 8px; border-radius: 12px; font-size: 12px;">${coffee}</span>`
+                            ).join('')}
+                        </div>
+                    </div>
+                `;
+
+                marker.bindPopup(popupContent);
+
+                // Handle marker click
+                marker.on('click', () => {
+                    selectShop(index);
+                });
+
+                window.mapMarkers.push(marker);
+                group.addLayer(marker);
+            });
+
+            if (shops.length > 0) {
+                map.fitBounds(group.getBounds(), { padding: [20, 20] });
+                if (shops.length === 1) {
+                    map.setZoom(16);
+                }
+            }
+        }
+
+        function showFallbackMarkers(shops, searchTerm) {
+            const mapDiv = document.getElementById('map');
+            if (shops.length === 0) {
+                mapDiv.innerHTML = `
+                    <div style="width: 100%; height: 100%; background: linear-gradient(135deg, #e2e8f0 0%, #cbd5e0 100%); display: flex; align-items: center; justify-content: center; flex-direction: column; color: #4a5568;">
+                        <div style="font-size: 3em; margin-bottom: 20px;">☕</div>
+                        <h3>No coffee shops found</h3>
+                        <p>Try searching for a different coffee type</p>
+                    </div>
+                `;
+                return;
+            }
+
+            const markersHtml = shops.map((shop, index) => `
+                <div onclick="selectShop(${index})" style="
+                    margin: 10px 0; 
+                    padding: 15px; 
+                    background: white; 
+                    border-radius: 10px; 
+                    cursor: pointer; 
+                    border-left: 4px solid #667eea;
+                    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+                    transition: transform 0.2s;
+                " onmouseover="this.style.transform='translateX(5px)'" onmouseout="this.style.transform='translateX(0)'">
+                    <div style="font-weight: bold; color: #2d3748; margin-bottom: 5px;">📍 ${shop.name}</div>
+                    <div style="color: #718096; font-size: 0.9em; margin-bottom: 8px;">${shop.address}</div>
+                    <div style="display: flex; flex-wrap: wrap; gap: 4px;">
+                        ${shop.coffees.map(coffee => 
+                            `<span style="background: ${coffee.toLowerCase().includes(searchTerm) ? '#f56565' : '#667eea'}; color: white; padding: 2px 8px; border-radius: 12px; font-size: 12px;">${coffee}</span>`
+                        ).join('')}
+                    </div>
+                </div>
+            `).join('');
+
+            mapDiv.innerHTML = `
+                <div style="width: 100%; height: 100%; background: linear-gradient(135deg, #f7fafc 0%, #edf2f7 100%); padding: 20px; overflow-y: auto;">
+                    <div style="text-align: center; margin-bottom: 20px; color: #4a5568;">
+                        <h3>📍 ${shops.length} Coffee Shop${shops.length !== 1 ? 's' : ''} Found</h3>
+                        <p>Showing locations for "${searchTerm}"</p>
+                    </div>
+                    ${markersHtml}
+                </div>
+            `;
+        }
+
+        function selectShop(index) {
+            // Remove previous selection
+            document.querySelectorAll('.coffee-shop').forEach(shop => {
+                shop.classList.remove('selected');
+            });
+
+            // Add selection to clicked shop
+            const shopElement = document.getElementById(`shop-${index}`);
+            if (shopElement) {
+                shopElement.classList.add('selected');
+                selectedShop = index;
+
+                // Open popup for selected marker
+                if (window.mapMarkers && window.mapMarkers[index]) {
+                    window.mapMarkers[index].openPopup();
+                    map.panTo(window.mapMarkers[index].getLatLng());
+                }
+            }
+        }
+
+        function clearMarkers() {
+            if (window.mapMarkers) {
+                window.mapMarkers.forEach(marker => map.removeLayer(marker));
+                window.mapMarkers = [];
+            }
+        }
+
+        function clearSearch() {
+            document.getElementById('coffeeSearch').value = '';
+            document.getElementById('shopsList').innerHTML = '';
+            document.getElementById('resultsCount').textContent = 'Enter a coffee type to find shops';
+            clearMarkers();
+            selectedShop = null;
+            
+            if (map) {
+                map.setView([51.5074, -0.1278], 12);
+            }
+        }
+
+        function updateResultsCount(count, searchTerm) {
+            const resultsDiv = document.getElementById('resultsCount');
+            if (count === 0) {
+                resultsDiv.textContent = `No shops found serving "${searchTerm}"`;
+            } else {
+                resultsDiv.textContent = `${count} shop${count !== 1 ? 's' : ''} serving "${searchTerm}"`;
+            }
+        }
+
+        // Event listeners
+        document.getElementById('coffeeSearch').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                searchCoffee();
+            }
+        });
+
+        // Auto-search as user types (debounced)
+        let searchTimeout;
+        document.getElementById('coffeeSearch').addEventListener('input', function() {
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(() => {
+                const value = this.value.trim();
+                if (value.length > 2) {
+                    searchCoffee();
+                } else if (value.length === 0) {
+                    clearSearch();
+                }
+            }, 300);
+        });
+
+        // Initialize when page loads
+        document.addEventListener('DOMContentLoaded', async function() {
+            // Load coffee shops data first
+            await loadCoffeeShopsData();
+            
+            // Wait a moment for CSS to load, then initialize map
+            setTimeout(() => {
+                try {
+                    initMap();
+                } catch (error) {
+                    console.log('Map loading error:', error);
+                    // Fallback: show a simple map placeholder
+                    showMapFallback();
+                }
+            }, 100);
+        });
+
+        function showMapFallback() {
+            const mapDiv = document.getElementById('map');
+            mapDiv.innerHTML = `
+                <div style="width: 100%; height: 100%; background: linear-gradient(135deg, #e2e8f0 0%, #cbd5e0 100%); display: flex; align-items: center; justify-content: center; flex-direction: column; color: #4a5568; padding: 20px;">
+                    <div style="font-size: 3em; margin-bottom: 20px;">🗺️</div>
+                    <h3>London Coffee Map</h3>
+                    <p style="margin-top: 10px; text-align: center; max-width: 300px;">Map is loading... If you see this message, the interactive map will show coffee shop locations when you search.</p>
+                    <div id="fallback-markers" style="margin-top: 20px; padding: 15px; background: rgba(255,255,255,0.8); border-radius: 8px; max-width: 400px; text-align: left;">
+                        <strong>Search for coffee types like:</strong><br>
+                        • cappuccino • flat white • espresso<br>
+                        • cold brew • pour over • single origin
+                    </div>
+                </div>
+            `;
+            document.getElementById('mapPlaceholder').style.display = 'none';
+        }
+    </script>
+</body>
+</html>
