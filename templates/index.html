@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Coffee Recommendation System</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <style>
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow-x: hidden;
+        }
+        
+        /* Coffee Animation Elements */
+        .coffee-bean {
+            position: fixed;
+            width: 20px;
+            height: 20px;
+            background: #8B4513;
+            border-radius: 50% 50% 50% 50% / 60% 60% 40% 40%;
+            animation: float 6s ease-in-out infinite;
+            z-index: 1;
+            opacity: 0.7;
+        }
+        
+        .coffee-bean::before {
+            content: '';
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 4px;
+            height: 4px;
+            background: #A0522D;
+            border-radius: 50%;
+        }
+        
+        @keyframes float {
+            0%, 100% { transform: translateY(0px) rotate(0deg); }
+            25% { transform: translateY(-20px) rotate(90deg); }
+            50% { transform: translateY(-40px) rotate(180deg); }
+            75% { transform: translateY(-20px) rotate(270deg); }
+        }
+        
+        .steam {
+            position: absolute;
+            width: 8px;
+            height: 20px;
+            background: linear-gradient(to top, rgba(255,255,255,0.8), transparent);
+            border-radius: 50% 50% 50% 50% / 60% 60% 40% 40%;
+            animation: steam-rise 3s ease-out infinite;
+            opacity: 0.6;
+        }
+        
+        @keyframes steam-rise {
+            0% { transform: translateY(0) scale(1); opacity: 0.6; }
+            50% { transform: translateY(-30px) scale(1.5); opacity: 0.3; }
+            100% { transform: translateY(-60px) scale(2); opacity: 0; }
+        }
+        
+        .pulse-effect {
+            animation: pulse 2s ease-in-out infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+        
+        .main-container {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            margin: 20px auto;
+            max-width: 1200px;
+            position: relative;
+            z-index: 10;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #8B4513 0%, #A0522D 100%);
+            color: white;
+            padding: 30px;
+            border-radius: 20px 20px 0 0;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .header::before {
+            content: '☕';
+            position: absolute;
+            top: 10px;
+            right: 20px;
+            font-size: 2em;
+            animation: bounce 2s ease-in-out infinite;
+        }
+        
+        .header::after {
+            content: '☕';
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            font-size: 1.5em;
+            animation: bounce 2s ease-in-out infinite 0.5s;
+        }
+        
+        @keyframes bounce {
+            0%, 20%, 50%, 80%, 100% { transform: translateY(0); }
+            40% { transform: translateY(-10px); }
+            60% { transform: translateY(-5px); }
+        }
+        
+        .search-section {
+            padding: 30px;
+            border-bottom: 1px solid #eee;
+            position: relative;
+        }
+        
+        .search-box {
+            background: white;
+            border: 2px solid #ddd;
+            border-radius: 25px;
+            padding: 15px 25px;
+            font-size: 16px;
+            transition: all 0.3s ease;
+            position: relative;
+        }
+        
+        .search-box:focus {
+            border-color: #8B4513;
+            box-shadow: 0 0 15px rgba(139, 69, 19, 0.3);
+            outline: none;
+            transform: scale(1.02);
+        }
+        
+        .search-btn {
+            background: linear-gradient(135deg, #8B4513 0%, #A0522D 100%);
+            border: none;
+            border-radius: 25px;
+            padding: 15px 30px;
+            color: white;
+            font-weight: bold;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .search-btn::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+            transition: left 0.5s;
+        }
+        
+        .search-btn:hover::before {
+            left: 100%;
+        }
+        
+        .search-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(139, 69, 19, 0.3);
+        }
+        
+        .results-section {
+            padding: 30px;
+        }
+        
+        .coffee-card {
+            background: white;
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .coffee-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(139, 69, 19, 0.1), transparent);
+            transition: left 0.6s;
+        }
+        
+        .coffee-card:hover::before {
+            left: 100%;
+        }
+        
+        .coffee-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 15px 30px rgba(0, 0, 0, 0.15);
+        }
+        
+        .coffee-name {
+            color: #8B4513;
+            font-weight: bold;
+            font-size: 1.2em;
+            margin-bottom: 10px;
+        }
+        
+        .coffee-details {
+            color: #666;
+            font-size: 0.9em;
+        }
+        
+        .similarity-score {
+            background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+            color: white;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 0.8em;
+            font-weight: bold;
+            animation: pulse 2s ease-in-out infinite;
+        }
+        
+        .map-container {
+            height: 500px;
+            width: 100%;
+            border-radius: 15px;
+            overflow: hidden;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            position: relative;
+        }
+        
+        #map {
+            height: 100%;
+            width: 100%;
+            border-radius: 15px;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 50px;
+            color: #666;
+        }
+        
+        .loading .spinner-border {
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 10px;
+            margin: 20px 0;
+        }
+        
+        .shop-info {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 15px;
+            margin-top: 10px;
+        }
+        
+        .shop-name {
+            font-weight: bold;
+            color: #8B4513;
+        }
+        
+        .shop-address {
+            color: #666;
+            font-size: 0.9em;
+        }
+        
+        /* Mood suggestions */
+        .mood-suggestions {
+            margin-top: 10px;
+            font-size: 0.9em;
+            color: #666;
+        }
+        
+        .mood-tag {
+            display: inline-block;
+            background: rgba(139, 69, 19, 0.1);
+            color: #8B4513;
+            padding: 4px 8px;
+            border-radius: 12px;
+            margin: 2px;
+            font-size: 0.8em;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .mood-tag:hover {
+            background: rgba(139, 69, 19, 0.2);
+            transform: scale(1.05);
+        }
+    </style>
+</head>
+<body>
+    <!-- Floating Coffee Beans Animation -->
+    <div class="coffee-bean" style="top: 10%; left: 5%; animation-delay: 0s;"></div>
+    <div class="coffee-bean" style="top: 20%; left: 15%; animation-delay: 1s;"></div>
+    <div class="coffee-bean" style="top: 15%; left: 85%; animation-delay: 2s;"></div>
+    <div class="coffee-bean" style="top: 25%; left: 90%; animation-delay: 3s;"></div>
+    <div class="coffee-bean" style="top: 60%; left: 10%; animation-delay: 4s;"></div>
+    <div class="coffee-bean" style="top: 70%; left: 80%; animation-delay: 5s;"></div>
+    <div class="coffee-bean" style="top: 80%; left: 20%; animation-delay: 0.5s;"></div>
+    <div class="coffee-bean" style="top: 85%; left: 75%; animation-delay: 1.5s;"></div>
+    
+    <!-- Steam Effects -->
+    <div class="steam" style="top: 30%; left: 30%; animation-delay: 0s;"></div>
+    <div class="steam" style="top: 35%; left: 32%; animation-delay: 0.5s;"></div>
+    <div class="steam" style="top: 40%; left: 34%; animation-delay: 1s;"></div>
+    <div class="steam" style="top: 45%; left: 70%; animation-delay: 1.5s;"></div>
+    <div class="steam" style="top: 50%; left: 72%; animation-delay: 2s;"></div>
+    <div class="steam" style="top: 55%; left: 74%; animation-delay: 2.5s;"></div>
+
+    <div class="container-fluid">
+        <div class="main-container">
+            <!-- Header -->
+            <div class="header">
+                <h1 class="pulse-effect">☕ Coffee Recommendation System</h1>
+                <p class="mb-0">Discover your perfect coffee and find where to get it!</p>
+            </div>
+            
+            <!-- Search Section -->
+            <div class="search-section">
+                <div class="row justify-content-center">
+                    <div class="col-md-8">
+                        <div class="input-group">
+                            <input type="text" id="queryInput" class="form-control search-box" 
+                                   placeholder="Describe your coffee preferences and mood (e.g., 'I like vanilla', 'feeling tired', 'need energy', 'chocolate notes', 'bright and fruity')">
+                            <button class="btn search-btn" onclick="getRecommendations()">
+                                🔍 Find Coffee
+                            </button>
+                        </div>
+                        <div class="mood-suggestions">
+                            <small>Try these moods: 
+                                <span class="mood-tag" onclick="setMood('tired')">tired</span>
+                                <span class="mood-tag" onclick="setMood('energetic')">energetic</span>
+                                <span class="mood-tag" onclick="setMood('stressed')">stressed</span>
+                                <span class="mood-tag" onclick="setMood('happy')">happy</span>
+                                <span class="mood-tag" onclick="setMood('focused')">focused</span>
+                                <span class="mood-tag" onclick="setMood('creative')">creative</span>
+                                <span class="mood-tag" onclick="setMood('relaxed')">relaxed</span>
+                                <span class="mood-tag" onclick="setMood('social')">social</span>
+                            </small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Results Section -->
+            <div class="results-section" id="resultsSection" style="display: none;">
+                <div class="row">
+                    <!-- Coffee Recommendations -->
+                    <div class="col-md-6">
+                        <h3>☕ Top Coffee Recommendations</h3>
+                        <div id="recommendationsContainer"></div>
+                    </div>
+                    
+                    <!-- Map -->
+                    <div class="col-md-6">
+                        <h3>📍 Coffee Shops Near You</h3>
+                        <div id="map" class="map-container"></div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Loading -->
+            <div id="loadingSection" class="loading" style="display: none;">
+                <div class="spinner-border text-primary" role="status">
+                    <span class="visually-hidden">Loading...</span>
+                </div>
+                <p class="mt-3">Finding the perfect coffee for you...</p>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script>
+        let map;
+        let markers = [];
+        
+        // Set mood function
+        function setMood(mood) {
+            const input = document.getElementById('queryInput');
+            const currentValue = input.value.trim();
+            if (currentValue) {
+                input.value = currentValue + ', feeling ' + mood;
+            } else {
+                input.value = 'feeling ' + mood;
+            }
+            input.focus();
+        }
+        
+        // Initialize map
+        function initMap() {
+            // Wait a bit for the DOM to be ready
+            setTimeout(() => {
+                const mapElement = document.getElementById('map');
+                if (mapElement) {
+                    map = L.map('map').setView([51.5074, -0.1278], 10); // London coordinates
+                    
+                    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                        attribution: '© OpenStreetMap contributors'
+                    }).addTo(map);
+                    
+                    // Force a resize to ensure proper rendering
+                    setTimeout(() => {
+                        map.invalidateSize();
+                    }, 100);
+                }
+            }, 100);
+        }
+        
+        // Clear existing markers
+        function clearMarkers() {
+            markers.forEach(marker => map.removeLayer(marker));
+            markers = [];
+        }
+        
+        // Add markers for coffee shops
+        function addShopMarkers(shops) {
+            clearMarkers();
+            
+            if (shops.length === 0) {
+                // Show a message if no shops found
+                const noShopsDiv = document.createElement('div');
+                noShopsDiv.className = 'alert alert-info';
+                noShopsDiv.innerHTML = `
+                    <strong>No coffee shops found</strong><br>
+                    The recommended coffees might not be available in local shops yet.
+                `;
+                document.getElementById('map').appendChild(noShopsDiv);
+                return;
+            }
+            
+            shops.forEach((shop, index) => {
+                const marker = L.marker([shop.lat, shop.lng]).addTo(map);
+                
+                const popupContent = `
+                    <div style="min-width: 200px;">
+                        <h6 class="shop-name">${shop.name}</h6>
+                        <p class="shop-address">${shop.address}</p>
+                        <strong>Available coffees:</strong>
+                        <ul style="margin: 5px 0; padding-left: 15px;">
+                            ${shop.matching_coffees.map(coffee => 
+                                `<li>${coffee.name} (${coffee.origin})</li>`
+                            ).join('')}
+                        </ul>
+                    </div>
+                `;
+                
+                marker.bindPopup(popupContent);
+                markers.push(marker);
+            });
+            
+            // Fit map to show all markers
+            if (markers.length > 0) {
+                const group = new L.featureGroup(markers);
+                map.fitBounds(group.getBounds().pad(0.1));
+            }
+        }
+        
+        // Get recommendations from API
+        async function getRecommendations() {
+            const query = document.getElementById('queryInput').value.trim();
+            
+            if (!query) {
+                alert('Please enter your coffee preferences');
+                return;
+            }
+            
+            // Show loading
+            document.getElementById('loadingSection').style.display = 'block';
+            document.getElementById('resultsSection').style.display = 'none';
+            
+            try {
+                const response = await fetch('/api/recommend', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ query: query })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    displayResults(data);
+                } else {
+                    displayError(data.error || 'An error occurred');
+                }
+            } catch (error) {
+                displayError('Network error: ' + error.message);
+            } finally {
+                document.getElementById('loadingSection').style.display = 'none';
+            }
+        }
+        
+        // Display results
+        function displayResults(data) {
+            const container = document.getElementById('recommendationsContainer');
+            
+            let html = `
+                <div class="alert alert-success">
+                    <strong>Found ${data.recommendations.length} recommendations for:</strong> "${data.query}"
+                </div>
+            `;
+            
+            data.recommendations.forEach((coffee, index) => {
+                html += `
+                    <div class="coffee-card">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <div class="coffee-name">${coffee.name}</div>
+                            <span class="similarity-score">${(coffee.similarity_score * 100).toFixed(1)}% match</span>
+                        </div>
+                        <div class="coffee-details">
+                            <strong>Roaster:</strong> ${coffee.roaster}<br>
+                            <strong>Origin:</strong> ${coffee.origin}<br>
+                            <strong>Rating:</strong> ${coffee.rating}/100<br>
+                            <strong>Description:</strong> ${coffee.description}
+                        </div>
+                        <div class="personalized-comment" style="margin-top: 15px; padding: 10px; background: #f8f9fa; border-radius: 8px; border-left: 4px solid #8B4513;">
+                            <strong>💡 Why this coffee is perfect for you:</strong><br>
+                            ${coffee.personalized_comment || "This coffee is well-suited to your preferences."}
+                        </div>
+                    </div>
+                `;
+            });
+            
+            container.innerHTML = html;
+            
+            // Update map with coffee shops
+            addShopMarkers(data.coffee_shops);
+            
+            // Show results
+            document.getElementById('resultsSection').style.display = 'block';
+            
+            // Refresh map to ensure proper display
+            setTimeout(() => {
+                if (map) {
+                    map.invalidateSize();
+                }
+            }, 200);
+        }
+        
+        // Display error
+        function displayError(message) {
+            const container = document.getElementById('recommendationsContainer');
+            container.innerHTML = `
+                <div class="error">
+                    <strong>Error:</strong> ${message}
+                </div>
+            `;
+            document.getElementById('resultsSection').style.display = 'block';
+        }
+        
+        // Handle Enter key
+        document.getElementById('queryInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                getRecommendations();
+            }
+        });
+        
+        // Initialize map when page loads
+        document.addEventListener('DOMContentLoaded', function() {
+            initMap();
+        });
+    </script>
+</body>
+</html> 
