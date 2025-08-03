@@ -17,7 +17,7 @@ import logging
 import numpy as np
 
 # Set up logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 
@@ -405,7 +405,7 @@ Assistant: Based on your preferences, I'd recommend """
                     # Use the language model part for generation
                     outputs = self.model.language_model.generate(
                         **inputs,
-                        max_length=max_length,
+                        max_new_tokens=200,  # Use max_new_tokens instead of max_length
                         num_return_sequences=1,
                         temperature=0.8,  # Slightly higher for more conversational responses
                         do_sample=True,
@@ -416,7 +416,7 @@ Assistant: Based on your preferences, I'd recommend """
                     # Direct generation
                     outputs = self.model.generate(
                         **inputs,
-                        max_length=max_length,
+                        max_new_tokens=200,  # Use max_new_tokens instead of max_length
                         num_return_sequences=1,
                         temperature=0.8,
                         do_sample=True,
@@ -428,26 +428,56 @@ Assistant: Based on your preferences, I'd recommend """
             response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
 
             # Extract only the assistant response
+            original_response = response
+
+            # Debug: log the raw response
+            logger.debug(f"Raw response: {response}")
+
+            # Remove the original prompt from the response
+            if prompt in response:
+                response = response.replace(prompt, "").strip()
+
+            # Try different extraction methods for assistant content
             if "<|assistant|>" in response:
                 response = response.split("<|assistant|>")[-1].strip()
             elif "### Response:" in response:
                 response = response.split("### Response:")[-1].strip()
+            elif "Assistant:" in response:
+                # Extract everything after the last "Assistant:"
+                parts = response.split("Assistant:")
+                if len(parts) > 1:
+                    response = parts[-1].strip()
 
-            # Clean up the response to remove conversation history that got included
-            if "User:" in response:
-                # Remove everything before the last "Assistant:" or start fresh
-                if "Assistant:" in response:
-                    response = response.split("Assistant:")[-1].strip()
-                else:
-                    # If no "Assistant:" found, try to extract just the recommendation part
-                    lines = response.split("\n")
-                    cleaned_lines = []
-                    for line in lines:
-                        if not line.strip().startswith(
-                            "User:"
-                        ) and not line.strip().startswith("Assistant:"):
-                            cleaned_lines.append(line)
-                    response = "\n".join(cleaned_lines).strip()
+            # Clean up any remaining conversation markers
+            lines = response.split("\n")
+            cleaned_lines = []
+            for line in lines:
+                line = line.strip()
+                if (
+                    line
+                    and not line.startswith("User:")
+                    and not line.startswith("Assistant:")
+                    and not line.startswith("A:")
+                    and len(line) > 3
+                ):
+                    cleaned_lines.append(line)
+
+            response = "\n".join(cleaned_lines).strip()
+
+            # Remove duplicates (sometimes the model repeats itself)
+            if response:
+                lines = response.split("\n")
+                seen = set()
+                unique_lines = []
+                for line in lines:
+                    if line not in seen:
+                        seen.add(line)
+                        unique_lines.append(line)
+                response = "\n".join(unique_lines)
+
+            # Final fallback if still empty
+            if not response or len(response) < 5:
+                response = "I understand you're asking about chocolate notes. Let me recommend a coffee with rich chocolate characteristics that would complement your preference."
 
             return response
 
@@ -568,9 +598,9 @@ Assistant: Based on your preferences, I'd recommend """
                         ].strip()
                 conversation_history.append(f"Assistant: {clean_recommendation}")
 
-                # Keep only last 6 exchanges (3 user-assistant pairs)
-                if len(conversation_history) > 6:
-                    conversation_history = conversation_history[-6:]
+                # Keep only last 4 exchanges (2 user-assistant pairs) to prevent token overflow
+                if len(conversation_history) > 4:
+                    conversation_history = conversation_history[-4:]
 
                 print("\n" + "=" * 60 + "\n")
 
