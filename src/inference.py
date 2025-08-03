@@ -68,6 +68,9 @@ class HybridCoffeeRecommender(nn.Module):
 
         # Similarity prediction head
         self.similarity_head = nn.Sequential(
+            nn.Linear(hidden_dim * 2, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(0.1),
             nn.Linear(hidden_dim, hidden_dim // 2),
             nn.ReLU(),
             nn.Dropout(0.1),
@@ -174,6 +177,13 @@ class HybridCoffeeRecommendationInference:
                     embedding_model_name=model_config["embedding_model_name"],
                     embedding_dim=model_config["embedding_dim"],
                     hidden_dim=model_config["hidden_dim"],
+                )
+
+                # Add special tokens to match training
+                special_tokens = ["<|user|>", "<|assistant|>"]
+                self.model.tokenizer.add_tokens(special_tokens)
+                self.model.language_model.resize_token_embeddings(
+                    len(self.model.tokenizer)
                 )
 
                 # Load trained weights
@@ -315,14 +325,25 @@ class HybridCoffeeRecommendationInference:
         return matches[:top_k]
 
     def generate_recommendation(
-        self, user_input: str, max_length: int = 400, use_embeddings: bool = True
+        self,
+        user_input: str,
+        conversation_history: List[str] = None,
+        max_length: int = 400,
+        use_embeddings: bool = True,
     ) -> str:
-        """Generate coffee recommendation with embedding support."""
+        """Generate coffee recommendation with conversation support."""
 
         if not self.model or not self.tokenizer:
             return "Model not loaded. Please train the model first."
 
         try:
+            # Build conversation context
+            conversation_context = ""
+            if conversation_history:
+                conversation_context = (
+                    "\n".join(conversation_history[-3:]) + "\n"
+                )  # Last 3 exchanges
+
             if use_embeddings and self.embedding_model:
                 # Enhanced mode: use embeddings to find best matches first
                 coffee_matches = self.find_best_coffee_matches(user_input, top_k=3)
@@ -331,8 +352,13 @@ class HybridCoffeeRecommendationInference:
                     # Use the best match to inform the generation
                     best_match = coffee_matches[0][1]
 
-                    # Create enhanced prompt with coffee context
-                    prompt = f"""User: {user_input}
+                    # Create conversational prompt with coffee context
+                    if conversation_history:
+                        prompt = f"""{conversation_context}User: {user_input}
+
+Assistant: """
+                    else:
+                        prompt = f"""User: {user_input}
 
 Assistant: Based on your preferences, I'd recommend **{best_match['name']}** by {best_match['roaster']}.
 
@@ -341,16 +367,26 @@ Assistant: Based on your preferences, I'd recommend **{best_match['name']}** by 
 
 **Why this coffee:** {best_match['description']}
 
-This recommendation is based on semantic similarity to your query. """
+This recommendation is based on semantic similarity to your query. I'm confident this coffee will match your preferences because it has the characteristics you're looking for. What do you think about this recommendation? Would you like me to suggest alternatives or explain more about why this coffee fits your mood? """
 
                 else:
                     # Fallback to basic prompt
-                    prompt = f"""User: {user_input}
+                    if conversation_history:
+                        prompt = f"""{conversation_context}User: {user_input}
+
+Assistant: """
+                    else:
+                        prompt = f"""User: {user_input}
 
 Assistant: Based on your preferences, I'd recommend """
             else:
                 # Basic mode: use simple prompt
-                prompt = f"""User: {user_input}
+                if conversation_history:
+                    prompt = f"""{conversation_context}User: {user_input}
+
+Assistant: """
+                else:
+                    prompt = f"""User: {user_input}
 
 Assistant: Based on your preferences, I'd recommend """
 
@@ -371,7 +407,7 @@ Assistant: Based on your preferences, I'd recommend """
                         **inputs,
                         max_length=max_length,
                         num_return_sequences=1,
-                        temperature=0.7,
+                        temperature=0.8,  # Slightly higher for more conversational responses
                         do_sample=True,
                         pad_token_id=self.tokenizer.eos_token_id,
                         eos_token_id=self.tokenizer.eos_token_id,
@@ -382,7 +418,7 @@ Assistant: Based on your preferences, I'd recommend """
                         **inputs,
                         max_length=max_length,
                         num_return_sequences=1,
-                        temperature=0.7,
+                        temperature=0.8,
                         do_sample=True,
                         pad_token_id=self.tokenizer.eos_token_id,
                         eos_token_id=self.tokenizer.eos_token_id,
@@ -396,6 +432,22 @@ Assistant: Based on your preferences, I'd recommend """
                 response = response.split("<|assistant|>")[-1].strip()
             elif "### Response:" in response:
                 response = response.split("### Response:")[-1].strip()
+
+            # Clean up the response to remove conversation history that got included
+            if "User:" in response:
+                # Remove everything before the last "Assistant:" or start fresh
+                if "Assistant:" in response:
+                    response = response.split("Assistant:")[-1].strip()
+                else:
+                    # If no "Assistant:" found, try to extract just the recommendation part
+                    lines = response.split("\n")
+                    cleaned_lines = []
+                    for line in lines:
+                        if not line.strip().startswith(
+                            "User:"
+                        ) and not line.strip().startswith("Assistant:"):
+                            cleaned_lines.append(line)
+                    response = "\n".join(cleaned_lines).strip()
 
             return response
 
@@ -436,27 +488,36 @@ Assistant: Based on your preferences, I'd recommend """
         return detailed_response
 
     def interactive_mode(self):
-        """Run interactive mode for coffee recommendations."""
-        print("Hybrid Coffee Recommendation System with Embeddings")
+        """Run interactive mode for coffee recommendations with conversation support."""
+        print("Hybrid Coffee Recommendation Chatbot")
         print("=" * 60)
         print("Features:")
         print("- Embedding-aware recommendations")
         print("- Semantic similarity matching")
         print("- Conversational responses")
+        print("- Memory of previous exchanges")
         print()
         print("Commands:")
         print("  'quit' or 'exit' - Exit the system")
         print("  'detailed <query>' - Get detailed recommendation with scores")
         print("  'simple <query>' - Get basic recommendation without embeddings")
+        print("  'clear' - Clear conversation history")
         print()
+
+        conversation_history = []
 
         while True:
             try:
-                user_input = input("Describe your coffee preferences: ")
+                user_input = input("You: ")
 
                 if user_input.lower() in ["quit", "exit", "q"]:
-                    print("Thanks for using the coffee recommendation system!")
+                    print("Thanks for using the coffee recommendation chatbot!")
                     break
+
+                if user_input.lower() == "clear":
+                    conversation_history = []
+                    print("Conversation history cleared.")
+                    continue
 
                 if not user_input.strip():
                     print("Please provide some input.")
@@ -481,20 +542,40 @@ Assistant: Based on your preferences, I'd recommend """
                     query = user_input[7:]  # Remove "simple "
                     print("\nGenerating simple recommendation...")
                     recommendation = self.generate_recommendation(
-                        query, use_embeddings=False
+                        query,
+                        conversation_history=conversation_history,
+                        use_embeddings=False,
                     )
-                    print(f"\nRecommendation: {recommendation}")
+                    print(f"\nAssistant: {recommendation}")
 
                 else:
-                    # Standard recommendation
+                    # Standard recommendation with conversation history
                     print("\nGenerating recommendation...")
-                    recommendation = self.generate_recommendation(user_input)
-                    print(f"\nRecommendation: {recommendation}")
+                    recommendation = self.generate_recommendation(
+                        user_input, conversation_history=conversation_history
+                    )
+                    print(f"\nAssistant: {recommendation}")
+
+                # Add to conversation history (clean version)
+                conversation_history.append(f"User: {user_input}")
+                # Clean the recommendation before adding to history
+                clean_recommendation = recommendation
+                if "User:" in clean_recommendation:
+                    # Remove any conversation history that got included
+                    if "Assistant:" in clean_recommendation:
+                        clean_recommendation = clean_recommendation.split("Assistant:")[
+                            -1
+                        ].strip()
+                conversation_history.append(f"Assistant: {clean_recommendation}")
+
+                # Keep only last 6 exchanges (3 user-assistant pairs)
+                if len(conversation_history) > 6:
+                    conversation_history = conversation_history[-6:]
 
                 print("\n" + "=" * 60 + "\n")
 
             except KeyboardInterrupt:
-                print("\nThanks for using the coffee recommendation system!")
+                print("\nThanks for using the coffee recommendation chatbot!")
                 break
             except Exception as e:
                 logger.error(f"Error: {e}")

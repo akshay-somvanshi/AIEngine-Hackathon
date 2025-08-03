@@ -439,6 +439,7 @@ def train_hybrid_model(
             report_to=None,
             gradient_checkpointing=True,
             optim="adamw_torch",
+            save_safetensors=False,  # Disable safetensors to avoid shared tensor error
             # For multi-GPU, launch with torchrun or accelerate
         )
         # Custom data collator for embeddings
