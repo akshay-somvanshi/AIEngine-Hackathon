@@ -3,286 +3,480 @@
 Coffee Dataset Generation Script
 
 This script generates a comprehensive dataset for fine-tuning an LLM to recommend
-coffee based on user preferences and mood.
+coffee based on user preferences and mood, using real coffee data from
+coffee_analysis.csv.
 """
 
 import json
 import pandas as pd
 import random
 from typing import List, Dict, Any
+import os
+from sentence_transformers import SentenceTransformer
+import numpy as np
 
-# Coffee types and their characteristics
-COFFEE_TYPES = {
-    "Espresso": {
-        "roast_level": "Dark",
-        "caffeine_level": "High",
-        "brewing_method": "Espresso machine",
-        "flavors": ["Bold", "Earthy", "Chocolate", "Caramel"],
-        "best_for": ["Energy boost", "Quick caffeine", "Bold flavor lovers"],
-    },
-    "Americano": {
-        "roast_level": "Medium-Dark",
-        "caffeine_level": "Medium-High",
-        "brewing_method": "Espresso + hot water",
-        "flavors": ["Smooth", "Balanced", "Mild bitterness"],
-        "best_for": ["Morning routine", "Smooth coffee experience"],
-    },
-    "Cappuccino": {
-        "roast_level": "Medium",
-        "caffeine_level": "Medium",
-        "brewing_method": "Espresso + steamed milk + foam",
-        "flavors": ["Creamy", "Smooth", "Mild", "Sweet"],
-        "best_for": ["Relaxation", "Mild coffee lovers", "Afternoon break"],
-    },
-    "Latte": {
-        "roast_level": "Medium",
-        "caffeine_level": "Medium",
-        "brewing_method": "Espresso + steamed milk",
-        "flavors": ["Creamy", "Smooth", "Mild", "Sweet"],
-        "best_for": ["Relaxation", "Mild coffee lovers", "Social drinking"],
-    },
-    "Pour Over": {
-        "roast_level": "Light-Medium",
-        "caffeine_level": "Medium",
-        "brewing_method": "Pour over filter",
-        "flavors": ["Bright", "Fruity", "Clean", "Complex"],
-        "best_for": ["Focus", "Flavor appreciation", "Mindful drinking"],
-    },
-    "French Press": {
-        "roast_level": "Medium-Dark",
-        "caffeine_level": "Medium-High",
-        "brewing_method": "French press immersion",
-        "flavors": ["Full-bodied", "Rich", "Oily", "Bold"],
-        "best_for": ["Rich flavor", "Full-bodied experience", "Weekend mornings"],
-    },
-    "Cold Brew": {
-        "roast_level": "Medium",
-        "caffeine_level": "High",
-        "brewing_method": "Cold water extraction",
-        "flavors": ["Smooth", "Low acidity", "Sweet", "Mild"],
-        "best_for": ["Hot weather", "Smooth caffeine", "Iced coffee lovers"],
-    },
-    "Turkish Coffee": {
-        "roast_level": "Dark",
-        "caffeine_level": "High",
-        "brewing_method": "Boiled with sugar",
-        "flavors": ["Strong", "Sweet", "Spicy", "Traditional"],
-        "best_for": ["Cultural experience", "Strong coffee", "Traditional taste"],
-    },
-}
+# Initialize sentence transformer for semantic similarity
+try:
+    embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+    print("Loaded sentence transformer for semantic mood matching")
+except Exception as e:
+    print(f"Warning: Could not load sentence transformer: {e}")
+    embedding_model = None
 
-# Bean origins and their characteristics
-BEAN_ORIGINS = {
-    "Ethiopian Yirgacheffe": ["Bright", "Fruity", "Floral", "Light body"],
-    "Colombian": ["Balanced", "Medium body", "Nutty", "Smooth"],
-    "Brazilian": ["Low acidity", "Nutty", "Chocolate", "Full body"],
-    "Guatemalan": ["Spicy", "Chocolate", "Medium body", "Complex"],
-    "Costa Rican": ["Bright", "Clean", "Medium body", "Fruity"],
-    "Sumatran": ["Earthy", "Full body", "Low acidity", "Spicy"],
-    "Kenyan": ["Bright", "Fruity", "Wine-like", "Medium body"],
-    "Peruvian": ["Mild", "Smooth", "Medium body", "Balanced"],
-}
 
-# Mood and preference combinations
-MOOD_PREFERENCES = [
-    {
-        "mood": "stressed",
-        "preferences": ["energizing", "bold flavors", "high caffeine"],
-        "recommendations": ["Espresso", "Turkish Coffee", "Cold Brew"],
-    },
-    {
-        "mood": "tired",
-        "preferences": ["energizing", "strong", "quick boost"],
-        "recommendations": ["Espresso", "Americano", "Cold Brew"],
-    },
-    {
-        "mood": "relaxed",
-        "preferences": ["smooth", "mild", "creamy"],
-        "recommendations": ["Latte", "Cappuccino", "Pour Over"],
-    },
-    {
-        "mood": "focused",
-        "preferences": ["clear mind", "moderate caffeine", "complex flavors"],
-        "recommendations": ["Pour Over", "French Press", "Americano"],
-    },
-    {
-        "mood": "social",
-        "preferences": ["enjoyable", "smooth", "mild"],
-        "recommendations": ["Latte", "Cappuccino", "Pour Over"],
-    },
-    {
-        "mood": "creative",
-        "preferences": ["inspiration", "bright flavors", "moderate caffeine"],
-        "recommendations": ["Pour Over", "Cold Brew", "French Press"],
-    },
-    {
-        "mood": "productive",
-        "preferences": ["sustained energy", "balanced", "moderate caffeine"],
-        "recommendations": ["Americano", "French Press", "Espresso"],
-    },
-    {
-        "mood": "adventurous",
-        "preferences": ["unique flavors", "complex", "traditional"],
-        "recommendations": ["Turkish Coffee", "Cold Brew", "French Press"],
-    },
-]
+def load_coffee_analysis_data(
+    file_path: str = "data/coffee_analysis.csv",
+) -> pd.DataFrame:
+    """Load the real coffee analysis data."""
+    try:
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"Coffee analysis file not found: {file_path}")
+
+        df = pd.read_csv(file_path)
+        print(f"Loaded {len(df)} coffee samples from {file_path}")
+        print(f"Columns: {list(df.columns)}")
+        return df
+    except Exception as e:
+        print(f"Error loading coffee data: {e}")
+        return pd.DataFrame()
+
+
+def find_semantically_similar_mood(
+    input_mood: str, reference_moods: List[str], threshold: float = 0.7
+) -> str:
+    """Find the most semantically similar mood using embeddings."""
+    if embedding_model is None:
+        # Fallback to exact matching
+        input_mood_lower = input_mood.lower()
+        for mood in reference_moods:
+            if input_mood_lower == mood.lower():
+                return mood
+        return "balanced"  # Default fallback
+
+    try:
+        # Encode the input mood
+        input_embedding = embedding_model.encode([input_mood])[0]
+
+        # Encode all reference moods
+        reference_embeddings = embedding_model.encode(reference_moods)
+
+        # Calculate similarities
+        similarities = []
+        for ref_embedding in reference_embeddings:
+            similarity = np.dot(input_embedding, ref_embedding) / (
+                np.linalg.norm(input_embedding) * np.linalg.norm(ref_embedding)
+            )
+            similarities.append(similarity)
+
+        # Find the most similar mood
+        max_similarity_idx = np.argmax(similarities)
+        max_similarity = similarities[max_similarity_idx]
+
+        if max_similarity >= threshold:
+            return reference_moods[max_similarity_idx]
+        else:
+            return "balanced"  # Default if no good match
+
+    except Exception as e:
+        print(f"Error in semantic mood matching: {e}")
+        return "balanced"
+
+
+def map_mood_to_preferences_embedding(mood: str) -> Dict[str, Any]:
+    """Map any mood to appropriate preferences using semantic similarity."""
+    mood = mood.lower().strip()
+
+    # Base moods with their preferences
+    base_moods = {
+        "energetic": {
+            "preferences": ["bold", "strong", "intense", "high caffeine"],
+            "context": "I want something with character and energy",
+        },
+        "tired": {
+            "preferences": ["energizing", "bold flavors", "high caffeine"],
+            "context": "I need something to wake me up",
+        },
+        "focused": {
+            "preferences": ["balanced", "medium caffeine", "complex flavors"],
+            "context": "I need to concentrate on work",
+        },
+        "happy": {
+            "preferences": ["bright", "fruity", "sweet", "enjoyable"],
+            "context": "I'm in a good mood and want something enjoyable",
+        },
+        "stressed": {
+            "preferences": ["smooth", "mild", "relaxing", "calming"],
+            "context": "I want something calming and gentle",
+        },
+        "relaxed": {
+            "preferences": ["smooth", "creamy", "mild", "gentle"],
+            "context": "I want something gentle and comforting",
+        },
+        "creative": {
+            "preferences": ["complex", "unique", "inspiring", "artistic"],
+            "context": "I want something that sparks creativity",
+        },
+        "social": {
+            "preferences": ["smooth", "enjoyable", "conversational", "pleasant"],
+            "context": "I want something to enjoy with others",
+        },
+        "adventurous": {
+            "preferences": ["unique", "bold", "exotic", "different"],
+            "context": "I want to try something new and exciting",
+        },
+        "balanced": {
+            "preferences": ["balanced", "medium caffeine", "pleasant"],
+            "context": "I want something suitable for my mood",
+        },
+    }
+
+    # Find semantically similar mood
+    reference_moods = list(base_moods.keys())
+    similar_mood = find_semantically_similar_mood(mood, reference_moods)
+
+    # Return mapped preferences
+    if similar_mood in base_moods:
+        return {
+            "mood": mood,
+            "preferences": base_moods[similar_mood]["preferences"],
+            "context": base_moods[similar_mood]["context"],
+            "similar_mood": similar_mood,  # For debugging
+        }
+    else:
+        # Default fallback
+        return {
+            "mood": mood,
+            "preferences": ["balanced", "medium caffeine", "pleasant"],
+            "context": f"I'm feeling {mood} and want something suitable",
+            "similar_mood": "balanced",
+        }
+
+
+def map_mood_to_preferences(mood: str) -> Dict[str, Any]:
+    """Map any mood to appropriate preferences using semantic similarity."""
+    mood = mood.lower().strip()
+
+    # Mood synonyms and variations
+    mood_mappings = {
+        # Energy-related moods
+        "energetic": [
+            "energised",
+            "energized",
+            "energizing",
+            "energizing",
+            "awake",
+            "alert",
+            "lively",
+            "vibrant",
+        ],
+        "tired": ["exhausted", "sleepy", "fatigued", "drowsy", "weary", "drained"],
+        "focused": ["concentrated", "attentive", "mindful", "productive", "determined"],
+        # Emotional states
+        "happy": ["joyful", "cheerful", "content", "pleased", "satisfied", "upbeat"],
+        "stressed": ["anxious", "worried", "tense", "overwhelmed", "pressured"],
+        "relaxed": ["calm", "peaceful", "serene", "tranquil", "at ease", "chilled"],
+        # Activity-based moods
+        "creative": ["inspired", "artistic", "imaginative", "innovative"],
+        "social": ["friendly", "outgoing", "sociable", "extroverted"],
+        "adventurous": ["bold", "daring", "exploratory", "curious"],
+    }
+
+    # Find the base mood
+    base_mood = None
+    for base, variations in mood_mappings.items():
+        if mood in variations or mood == base:
+            base_mood = base
+            break
+
+    # Default mood preferences
+    mood_preferences = {
+        "energetic": {
+            "preferences": ["bold", "strong", "intense", "high caffeine"],
+            "context": "I want something with character and energy",
+        },
+        "tired": {
+            "preferences": ["energizing", "bold flavors", "high caffeine"],
+            "context": "I need something to wake me up",
+        },
+        "focused": {
+            "preferences": ["balanced", "medium caffeine", "complex flavors"],
+            "context": "I need to concentrate on work",
+        },
+        "happy": {
+            "preferences": ["bright", "fruity", "sweet", "enjoyable"],
+            "context": "I'm in a good mood and want something enjoyable",
+        },
+        "stressed": {
+            "preferences": ["smooth", "mild", "relaxing", "calming"],
+            "context": "I want something calming and gentle",
+        },
+        "relaxed": {
+            "preferences": ["smooth", "creamy", "mild", "gentle"],
+            "context": "I want something gentle and comforting",
+        },
+        "creative": {
+            "preferences": ["complex", "unique", "inspiring", "artistic"],
+            "context": "I want something that sparks creativity",
+        },
+        "social": {
+            "preferences": ["smooth", "enjoyable", "conversational", "pleasant"],
+            "context": "I want something to enjoy with others",
+        },
+        "adventurous": {
+            "preferences": ["unique", "bold", "exotic", "different"],
+            "context": "I want to try something new and exciting",
+        },
+    }
+
+    # Return mapped preferences or default
+    if base_mood and base_mood in mood_preferences:
+        return {
+            "mood": mood,
+            "preferences": mood_preferences[base_mood]["preferences"],
+            "context": mood_preferences[base_mood]["context"],
+        }
+    else:
+        # Default for unknown moods
+        return {
+            "mood": mood,
+            "preferences": ["balanced", "medium caffeine", "pleasant"],
+            "context": f"I'm feeling {mood} and want something suitable",
+        }
+
+
+def extract_coffee_info(df: pd.DataFrame) -> List[Dict[str, Any]]:
+    """Extract coffee information from the dataset."""
+    coffee_info = []
+
+    for _, row in df.iterrows():
+        # Extract coffee name and origin
+        coffee_name = row.get("name", "Unknown Coffee")
+        origin = row.get("origin_1", "Unknown Origin")
+
+        # Combine descriptions for flavor analysis
+        desc_1 = str(row.get("desc_1", ""))
+        desc_2 = str(row.get("desc_2", ""))
+        desc_3 = str(row.get("desc_3", ""))
+
+        # Create combined description
+        combined_desc = f"{desc_1} {desc_2} {desc_3}".strip()
+
+        # Extract flavors from descriptions
+        flavors = extract_flavors_from_description(combined_desc)
+
+        # Get rating if available
+        rating = row.get("rating", 0)
+
+        coffee_info.append(
+            {
+                "name": coffee_name,
+                "origin": origin,
+                "description": combined_desc,
+                "flavors": flavors,
+                "rating": rating,
+                "roaster": row.get("roaster", "Unknown Roaster"),
+                "roast_level": row.get("roast_level", "Medium"),
+            }
+        )
+
+    return coffee_info
+
+
+def extract_flavors_from_description(description: str) -> List[str]:
+    """Extract flavor notes from coffee description."""
+    description = description.lower()
+    flavors = []
+
+    # Common coffee flavor keywords
+    flavor_keywords = {
+        "fruity": ["fruit", "berry", "citrus", "apple", "cherry", "orange", "lemon"],
+        "chocolate": ["chocolate", "cocoa", "dark chocolate", "milk chocolate"],
+        "nutty": ["nut", "almond", "hazelnut", "walnut", "pecan"],
+        "caramel": ["caramel", "toffee", "butterscotch"],
+        "earthy": ["earth", "soil", "mushroom", "woody"],
+        "floral": ["flower", "jasmine", "rose", "lavender"],
+        "spicy": ["spice", "cinnamon", "clove", "pepper"],
+        "smooth": ["smooth", "creamy", "silky"],
+        "bright": ["bright", "vibrant", "lively"],
+        "balanced": ["balanced", "harmonious", "well-rounded"],
+        "bold": ["bold", "strong", "intense"],
+        "mild": ["mild", "gentle", "soft"],
+        "sweet": ["sweet", "honey", "sugar"],
+        "acidic": ["acid", "bright", "tart"],
+        "full-bodied": ["full-bodied", "rich", "heavy"],
+    }
+
+    for flavor_category, keywords in flavor_keywords.items():
+        for keyword in keywords:
+            if keyword in description:
+                flavors.append(flavor_category)
+                break
+
+    # If no flavors found, add some default ones
+    if not flavors:
+        if "smooth" in description or "creamy" in description:
+            flavors.append("smooth")
+        elif "bold" in description or "strong" in description:
+            flavors.append("bold")
+        else:
+            flavors.append("balanced")
+
+    return list(set(flavors))  # Remove duplicates
 
 
 def generate_input_text(
     mood: str, preferences: List[str], additional_context: str = ""
 ) -> str:
-    """Generate natural language input text."""
-    templates = [
-        f"I'm feeling {mood} and need something {', '.join(preferences)}. {additional_context}",
-        f"Looking for coffee recommendations. I'm {mood} and prefer {', '.join(preferences)}. {additional_context}",
-        f"Need coffee advice. Currently {mood} and want something {', '.join(preferences)}. {additional_context}",
-        f"I'm in a {mood} mood today. Can you suggest coffee that's {', '.join(preferences)}? {additional_context}",
-        f"Feeling {mood} and craving coffee that's {', '.join(preferences)}. {additional_context}",
+    """Generate input text based on mood and preferences."""
+    input_parts = []
+
+    if mood:
+        input_parts.append(f"I'm feeling {mood}")
+
+    if preferences:
+        pref_text = ", ".join(preferences)
+        input_parts.append(f"I prefer {pref_text}")
+
+    if additional_context:
+        input_parts.append(additional_context)
+
+    return ". ".join(input_parts) + "."
+
+
+def generate_output_text(coffee_info: Dict[str, Any]) -> str:
+    """Generate output text based on real coffee information."""
+    name = coffee_info["name"]
+    origin = coffee_info["origin"]
+    flavors = coffee_info["flavors"]
+    description = coffee_info["description"]
+    rating = coffee_info["rating"]
+    roaster = coffee_info["roaster"]
+
+    # Create structured output
+    output_parts = [
+        f"**Coffee:** {name}",
+        f"**Origin:** {origin}",
+        f"**Roaster:** {roaster}",
+        f"**Flavors:** {', '.join(flavors)}",
     ]
-    return random.choice(templates).strip()
 
+    if rating > 0:
+        output_parts.append(f"**Rating:** {rating}/100")
 
-def generate_output_text(
-    coffee_type: str, coffee_info: Dict, bean_origin: str, bean_flavors: List[str]
-) -> str:
-    """Generate structured output text."""
-    output = f"""Coffee Type: {coffee_type}
-Roast Level: {coffee_info['roast_level']}
-Bean Origin: {bean_origin}
-Flavors: {', '.join(coffee_info['flavors'] + bean_flavors[:2])}
-Brewing Method: {coffee_info['brewing_method']}
-Caffeine Level: {coffee_info['caffeine_level']}
-Best For: {', '.join(coffee_info['best_for'])}
-Additional Notes: Perfect for your current mood and preferences with its {', '.join(coffee_info['flavors'][:2])} profile"""
-    return output
+    if description and len(description.strip()) > 10:
+        # Truncate description if too long
+        short_desc = (
+            description[:200] + "..." if len(description) > 200 else description
+        )
+        output_parts.append(f"**Description:** {short_desc}")
+
+    return "\n".join(output_parts)
 
 
 def generate_dataset(num_samples: int = 1000) -> List[Dict[str, Any]]:
-    """Generate the complete dataset."""
+    """Generate dataset using real coffee data."""
+    # Load real coffee data
+    df = load_coffee_analysis_data()
+    if df.empty:
+        print("Failed to load coffee data, returning empty dataset")
+        return []
+
+    coffee_info_list = extract_coffee_info(df)
+    if not coffee_info_list:
+        print("No coffee information extracted, returning empty dataset")
+        return []
+
+    print(f"Extracted {len(coffee_info_list)} coffee samples with flavor information")
+
+    # Common moods for training data generation
+    common_moods = [
+        "tired",
+        "energetic",
+        "focused",
+        "happy",
+        "stressed",
+        "relaxed",
+        "energised",
+        "exhausted",
+        "concentrated",
+        "joyful",
+        "anxious",
+        "calm",
+        "creative",
+        "social",
+        "adventurous",
+        "inspired",
+        "worried",
+        "peaceful",
+    ]
+
     dataset = []
 
-    for i in range(num_samples):
-        # Select random mood and preferences
-        mood_config = random.choice(MOOD_PREFERENCES)
-        mood = mood_config["mood"]
-        preferences = mood_config["preferences"]
+    for _ in range(num_samples):
+        # Randomly select mood and coffee
+        mood = random.choice(common_moods)
+        coffee_info = random.choice(coffee_info_list)
 
-        # Add some random preferences
-        additional_prefs = random.sample(
-            [
-                "sweet",
-                "bitter",
-                "smooth",
-                "bold",
-                "light",
-                "dark",
-                "creamy",
-                "strong",
-                "mild",
-                "complex",
-                "simple",
-                "traditional",
-                "modern",
-                "organic",
-                "fair trade",
-            ],
-            random.randint(1, 3),
-        )
-        all_preferences = preferences + additional_prefs
-
-        # Select coffee type based on mood recommendations
-        coffee_type = random.choice(mood_config["recommendations"])
-        coffee_info = COFFEE_TYPES[coffee_type]
-
-        # Select bean origin
-        bean_origin = random.choice(list(BEAN_ORIGINS.keys()))
-        bean_flavors = BEAN_ORIGINS[bean_origin]
-
-        # Generate additional context
-        contexts = [
-            "I have about 10 minutes to enjoy it.",
-            "I'm working from home today.",
-            "I'm meeting friends later.",
-            "I have a long day ahead.",
-            "I need to stay focused.",
-            "I want something special.",
-            "I'm trying to cut back on caffeine.",
-            "I love trying new flavors.",
-            "I prefer traditional methods.",
-            "I'm in a hurry this morning.",
-        ]
-        additional_context = random.choice(contexts)
+        # Map mood to preferences using semantic similarity
+        mood_pref = map_mood_to_preferences_embedding(mood)
 
         # Generate input and output
-        input_text = generate_input_text(mood, all_preferences, additional_context)
-        output_text = generate_output_text(
-            coffee_type, coffee_info, bean_origin, bean_flavors
+        input_text = generate_input_text(
+            mood_pref["mood"], mood_pref["preferences"], mood_pref["context"]
         )
 
-        dataset.append(
-            {
-                "id": i,
-                "input": input_text,
-                "output": output_text,
-                "mood": mood,
-                "preferences": all_preferences,
-                "coffee_type": coffee_type,
-                "bean_origin": bean_origin,
-            }
-        )
+        output_text = generate_output_text(coffee_info)
 
+        # Create training example
+        example = {
+            "input": input_text,
+            "output": output_text,
+            "coffee_name": coffee_info["name"],
+            "origin": coffee_info["origin"],
+            "flavors": coffee_info["flavors"],
+            "mood": mood_pref["mood"],
+            "preferences": mood_pref["preferences"],
+        }
+
+        dataset.append(example)
+
+    print(f"Generated {len(dataset)} training examples")
     return dataset
 
 
 def save_dataset(dataset: List[Dict[str, Any]], output_dir: str = "data"):
-    """Save dataset in multiple formats."""
-    import os
-
+    """Save the generated dataset."""
     os.makedirs(output_dir, exist_ok=True)
 
     # Save as JSON
-    with open(f"{output_dir}/coffee_dataset.json", "w") as f:
-        json.dump(dataset, f, indent=2)
+    output_file = os.path.join(output_dir, "llm_training_data_2.json")
+    with open(output_file, "w", encoding="utf-8") as f:
+        json.dump(dataset, f, indent=2, ensure_ascii=False)
 
-    # Save as CSV
-    df = pd.DataFrame(dataset)
-    df.to_csv(f"{output_dir}/coffee_dataset.csv", index=False)
+    print(f"Dataset saved to {output_file}")
 
-    # Save training format for fine-tuning
-    training_data = []
-    for item in dataset:
-        training_data.append(
-            {
-                "instruction": "Recommend coffee based on preferences and mood",
-                "input": item["input"],
-                "output": item["output"],
-            }
-        )
-
-    with open(f"{output_dir}/training_data.json", "w") as f:
-        json.dump(training_data, f, indent=2)
-
-    print(f"Dataset saved to {output_dir}/")
-    print(f"Total samples: {len(dataset)}")
-    print(f"Formats: JSON, CSV, Training JSON")
+    # Print sample examples
+    print("\nSample training examples:")
+    for i, example in enumerate(dataset[:3]):
+        print(f"\nExample {i+1}:")
+        print(f"Input: {example['input']}")
+        print(f"Output: {example['output']}")
 
 
 def main():
-    """Main function to generate and save the dataset."""
-    print("Generating coffee recommendation dataset...")
+    """Main function to generate the dataset."""
+    print("Generating coffee recommendation dataset using real coffee data...")
 
     # Generate dataset
-    dataset = generate_dataset(num_samples=2000)
+    dataset = generate_dataset(num_samples=500)  # Reduced for real data
 
-    # Save dataset
-    save_dataset(dataset)
-
-    # Print some examples
-    print("\nExample entries:")
-    for i in range(3):
-        print(f"\n--- Example {i+1} ---")
-        print(f"Input: {dataset[i]['input']}")
-        print(f"Output: {dataset[i]['output']}")
+    if dataset:
+        # Save dataset
+        save_dataset(dataset)
+        print(f"\nDataset generation completed successfully!")
+        print(f"Total examples: {len(dataset)}")
+    else:
+        print("Dataset generation failed!")
 
 
 if __name__ == "__main__":

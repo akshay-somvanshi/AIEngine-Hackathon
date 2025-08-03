@@ -237,7 +237,7 @@ def format_hybrid_prompt(example: Dict[str, Any], embedding_model) -> Dict[str, 
         coffee_text = f"{coffee_name} {coffee_description}"
         coffee_embedding = embedding_model.encode([coffee_text])[0].tolist()
 
-        # Enhanced prompt format with embedding context
+        # Create a simple prompt format for training
         prompt_text = f"""User: {query}
 
 Assistant: Based on your preferences, I recommend {coffee_name} by {coffee_roaster}.
@@ -245,9 +245,7 @@ Assistant: Based on your preferences, I recommend {coffee_name} by {coffee_roast
 Origin: {coffee_origin}
 Description: {coffee_description}
 
-Why this coffee: {why_recommended}
-
-This recommendation is based on semantic similarity to your query. Would you like brewing suggestions?<|endoftext|>"""
+Why this coffee: {why_recommended}<|endoftext|>"""
 
         return {
             "text": prompt_text,
