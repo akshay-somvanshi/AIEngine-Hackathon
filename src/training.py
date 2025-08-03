@@ -29,8 +29,9 @@ logger = logging.getLogger(__name__)
 
 # Detect device
 if torch.cuda.is_available():
-    DEVICE = torch.device("cuda")
+    DEVICE = torch.device("cuda:0")
     logger.info(f"Using CUDA device: {torch.cuda.get_device_name(0)}")
+    torch.cuda.set_device(0)
 elif torch.backends.mps.is_available():
     DEVICE = torch.device("mps")
     logger.info("Using Apple MPS device")
@@ -62,7 +63,7 @@ class HybridCoffeeRecommender(nn.Module):
         self.language_model = AutoModelForCausalLM.from_pretrained(
             base_model_name,
             torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-            device_map="auto" if torch.cuda.is_available() else None,
+            device_map=None,
         )
 
         # Embedding model for semantic matching
@@ -429,8 +430,10 @@ def train_hybrid_model(
             save_steps=200,
             save_strategy="steps",
             load_best_model_at_end=False,
-            fp16=torch.cuda.is_available(),  # Enable fp16 for CUDA
-            bf16=torch.cuda.is_bf16_supported() if torch.cuda.is_available() else False,
+            #fp16=torch.cuda.is_available() and not torch.cuda.is_bf16_supported(),  # Enable fp16 for CUDA
+            #bf16=torch.cuda.is_bf16_supported() and torch.cuda.is_bf16_supported(),
+            bf16=False,
+            fp16=False,
             dataloader_pin_memory=torch.cuda.is_available(),
             remove_unused_columns=False,
             report_to=None,

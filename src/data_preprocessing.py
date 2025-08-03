@@ -464,7 +464,7 @@ class CoffeeLLMDataPreparator:
 
         # 2. Save LLM training format
         llm_data = self.create_llm_training_format(training_pairs)
-        with open(f"{output_dir}/llm_training_data_2.json", "w") as f:
+        with open(f"{output_dir}/llm_training_data.json", "w") as f:
             json.dump(llm_data, f, indent=2)
 
         # 3. Save embedding features dataset
