@@ -2,140 +2,183 @@
 """
 Coffee Recommendation Web Application
 
-A web interface for the coffee recommendation system using Flask and Gradio.
+This Flask app provides a web interface for the coffee recommendation system.
+Users can input queries and get recommendations with coffee shop locations on a map.
 """
 
-import gradio as gr
-from inference import CoffeeRecommender
+from flask import Flask, render_template, request, jsonify
+import json
 import os
+from src.inference import HybridCoffeeRecommendationInference
+from src.comment_generator import CoffeeCommentGenerator
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+app = Flask(__name__)
+
+# Initialize the recommendation system
+recommender = None
+comment_generator = None
 
 
-def create_recommendation_interface():
-    """Create the Gradio interface for coffee recommendations."""
+def initialize_recommender():
+    """Initialize the coffee recommendation system."""
+    global recommender, comment_generator
+    try:
+        recommender = HybridCoffeeRecommendationInference(
+            model_path="models/coffee_hybrid_recommender",
+            coffee_data_path="data/unique_coffees.json",
+        )
 
-    # Initialize the recommender
-    model_path = "models/coffee_recommender"
-    recommender = CoffeeRecommender(model_path)
+        # Initialize comment generator
+        comment_generator = CoffeeCommentGenerator()
 
-    def generate_recommendation(user_input):
-        """Generate coffee recommendation based on user input."""
-        if not user_input.strip():
-            return "Please provide your coffee preferences and mood."
-
-        try:
-            recommendation = recommender.generate_recommendation(user_input)
-            return recommendation
-        except Exception as e:
-            return f"Error generating recommendation: {str(e)}"
-
-    # Create Gradio interface
-    interface = gr.Interface(
-        fn=generate_recommendation,
-        inputs=gr.Textbox(
-            lines=3,
-            placeholder="Describe your coffee preferences and mood...\nExample: I'm feeling stressed and need something energizing with bold flavors.",
-            label="Coffee Preferences & Mood",
-        ),
-        outputs=gr.Textbox(
-            lines=10,
-            label="Coffee Recommendation",
-            placeholder="Your personalized coffee recommendation will appear here...",
-        ),
-        title="☕ Coffee Recommendation System",
-        description="""
-        Get personalized coffee recommendations based on your preferences and mood!
-        
-        **How to use:**
-        1. Describe your current mood (e.g., stressed, relaxed, focused)
-        2. Mention your coffee preferences (e.g., bold, smooth, sweet, bitter)
-        3. Add any additional context (e.g., time of day, occasion)
-        
-        **Example inputs:**
-        - "I'm feeling stressed and need something energizing with bold flavors"
-        - "I'm relaxed and want a smooth, mild coffee to enjoy"
-        - "I need to focus on work and want moderate caffeine"
-        """,
-        examples=[
-            [
-                "I'm feeling stressed and need something energizing. I prefer bold flavors."
-            ],
-            ["I'm tired and want a smooth, mild coffee to relax with."],
-            ["I need to focus on work and want something with moderate caffeine."],
-            ["I'm in a creative mood and want something unique and inspiring."],
-            ["I'm meeting friends and want a social coffee that's enjoyable."],
-            ["I'm adventurous and want to try something traditional and complex."],
-            ["I'm productive and need sustained energy throughout the day."],
-            ["I'm relaxed and want something creamy and smooth."],
-        ],
-        theme=gr.themes.Soft(),
-        css="""
-        .gradio-container {
-            max-width: 800px;
-            margin: 0 auto;
-        }
-        """,
-    )
-
-    return interface
+        logger.info("Coffee recommendation system initialized successfully")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to initialize recommender: {e}")
+        return False
 
 
-def create_flask_app():
-    """Create a Flask app as an alternative to Gradio."""
-    from flask import Flask, render_template, request, jsonify
+def load_coffee_shops():
+    """Load coffee shop data."""
+    try:
+        with open("data/coffee_shops_data.json", "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        logger.warning("data/coffee_shops_data.json not found, using empty data")
+        return {"coffeeShops": []}
+    except Exception as e:
+        logger.error(f"Error loading coffee shops: {e}")
+        return {"coffeeShops": []}
 
-    app = Flask(__name__)
 
-    # Initialize recommender
-    model_path = "models/coffee_recommender"
-    recommender = CoffeeRecommender(model_path)
+def find_coffee_shops_with_coffees(recommended_coffees):
+    """Find coffee shops that have the recommended coffees."""
+    coffee_shops_data = load_coffee_shops()
+    matching_shops = []
 
-    @app.route("/")
-    def index():
-        return render_template("index.html")
+    # Create a set of recommended coffee names for faster lookup
+    recommended_names = {coffee["name"].lower() for coffee in recommended_coffees}
 
-    @app.route("/recommend", methods=["POST"])
-    def recommend():
+    for shop in coffee_shops_data.get("coffeeShops", []):
+        shop_coffees = shop.get("coffees", [])
+        matching_coffees = []
+
+        for coffee in shop_coffees:
+            coffee_name = coffee.get("name", "").lower()
+            if any(
+                rec_name in coffee_name or coffee_name in rec_name
+                for rec_name in recommended_names
+            ):
+                matching_coffees.append(coffee)
+
+        if matching_coffees:
+            shop_info = {
+                "name": shop["name"],
+                "address": shop["address"],
+                "lat": shop["lat"],
+                "lng": shop["lng"],
+                "matching_coffees": matching_coffees,
+            }
+            matching_shops.append(shop_info)
+
+    return matching_shops
+
+
+@app.route("/")
+def index():
+    """Main page with the coffee recommendation interface."""
+    return render_template("index.html")
+
+
+@app.route("/api/recommend", methods=["POST"])
+def recommend():
+    """API endpoint for getting coffee recommendations."""
+    try:
         data = request.get_json()
-        user_input = data.get("input", "")
+        query = data.get("query", "").strip()
 
-        if not user_input.strip():
-            return jsonify({"error": "Please provide input"})
+        if not query:
+            return jsonify({"error": "Please provide a query"}), 400
 
-        try:
-            recommendation = recommender.generate_recommendation(user_input)
-            return jsonify({"recommendation": recommendation})
-        except Exception as e:
-            return jsonify({"error": str(e)})
+        if not recommender:
+            return jsonify({"error": "Recommendation system not initialized"}), 500
 
-    return app
+        # Get coffee recommendations using embeddings
+        coffee_matches = recommender.find_best_coffee_matches(query, top_k=3)
+
+        if not coffee_matches:
+            return jsonify({"error": "No coffee matches found for your query"}), 404
+
+        # Format recommendations with personalized comments
+        recommendations = []
+        for similarity_score, coffee in coffee_matches:
+            # Generate personalized comment
+            comment = ""
+            if comment_generator:
+                try:
+                    comment = comment_generator.generate_comment(query, coffee)
+                    # Validate the comment - if it's too short or contains unexpected content, use fallback
+                    if len(comment) < 20 or "iced tea" in comment.lower():
+                        comment = comment_generator._generate_fallback_comment(
+                            query, coffee
+                        )
+                except Exception as e:
+                    logger.warning(f"Failed to generate comment: {e}")
+                    comment = comment_generator._generate_fallback_comment(
+                        query, coffee
+                    )
+            else:
+                comment = f"This {coffee['name']} is well-suited to your preferences."
+
+            recommendations.append(
+                {
+                    "name": coffee["name"],
+                    "roaster": coffee.get("roaster", "Unknown"),
+                    "origin": coffee.get("origin", "Unknown"),
+                    "rating": coffee.get("rating", "N/A"),
+                    "description": coffee.get("description", ""),
+                    "similarity_score": round(similarity_score, 3),
+                    "personalized_comment": comment,
+                }
+            )
+
+        # Find coffee shops that have these coffees
+        matching_shops = find_coffee_shops_with_coffees(recommendations)
+
+        return jsonify(
+            {
+                "query": query,
+                "recommendations": recommendations,
+                "coffee_shops": matching_shops,
+                "total_shops_found": len(matching_shops),
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error in recommendation API: {e}")
+        return jsonify({"error": f"An error occurred: {str(e)}"}), 500
 
 
-def main():
-    """Main function to run the web application."""
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Coffee Recommendation Web App")
-    parser.add_argument(
-        "--interface",
-        choices=["gradio", "flask"],
-        default="gradio",
-        help="Web interface to use",
-    )
-    parser.add_argument(
-        "--port", type=int, default=7860, help="Port to run the server on"
-    )
-
-    args = parser.parse_args()
-
-    if args.interface == "gradio":
-        print("Starting Gradio interface...")
-        interface = create_recommendation_interface()
-        interface.launch(server_port=args.port, share=False, show_error=True)
-    elif args.interface == "flask":
-        print("Starting Flask interface...")
-        app = create_flask_app()
-        app.run(debug=True, port=args.port)
+@app.route("/api/coffee-shops")
+def get_coffee_shops():
+    """API endpoint to get all coffee shops data."""
+    try:
+        coffee_shops_data = load_coffee_shops()
+        return jsonify(coffee_shops_data)
+    except Exception as e:
+        logger.error(f"Error loading coffee shops: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == "__main__":
-    main()
+    # Initialize the recommendation system
+    if initialize_recommender():
+        logger.info("Starting Flask web application...")
+        app.run(debug=True, host="0.0.0.0", port=5001)
+    else:
+        logger.error("Failed to initialize recommendation system. Exiting.")
